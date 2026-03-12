@@ -1,0 +1,20 @@
+# ==============================================================================
+# ccPerturbSeq Pipeline — Additional Python Dependencies
+# ==============================================================================
+# These packages are needed ON TOP of the Parse Biosciences split-pipe install.
+# split-pipe already provides: numpy, pandas, scipy, matplotlib, scanpy,
+# anndata, h5py, pysam, natsort, leidenalg, python-igraph, indexed_gzip,
+# jinja2, psutil, python-calamine, Cython, numba.
+#
+# Install with:
+#   conda activate splitpipe
+#   pip install -r requirements_extra.txt
+# ==============================================================================
+
+# Required: configuration file parsing (may already be installed)
+pyyaml>=6.0
+
+# Strongly recommended: fast edit-distance alignment (~50x faster than pure Python)
+# Uses bit-parallel Myers algorithm (C implementation)
+# If not installed, scripts fall back to pure Python (much slower for large datasets)
+edlib>=1.3

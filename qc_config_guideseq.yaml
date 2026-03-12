@@ -1,0 +1,82 @@
+# ==============================================================================
+# Q1: Guide-Seq Bulk Library QC Configuration (Standalone)
+# ==============================================================================
+# This file configures the Q1 bulk guide-seq analysis pipeline.
+# It is designed to run INDEPENDENTLY of the single-cell pipeline.
+#
+# Optional: set 'sc_config' below to cross-reference shared parameters
+# (grna_reference, paths) from the single-cell config.yaml.
+#
+# Usage:
+#   from scripts.qc_config_loader import load_guideseq_config
+#   cfg = load_guideseq_config('qc_config_guideseq.yaml')
+# ==============================================================================
+
+# --- Optional cross-reference to single-cell config ---
+# When present and the file exists, shared fields (paths.grna_reference,
+# paths.project_dir, paths.log_dir) are inherited via deep-merge.
+# When absent or the file does not exist, Q1 runs fully standalone.
+sc_config: "config.yaml"
+
+# --- Paths ---
+paths:
+  # Directory containing guide-seq bulk FASTQ files (R1/R2 pairs)
+  guideseq_fastq_dir: "/medpop/rgupta/Jiahao/TIMI/CSM_guideseq/fastq/"
+  # Path to the gRNA+iBAR reference lookup table (CSV)
+  grna_reference: "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/references/grna_ibar_reference.csv"
+  # Output directory for Q1 results
+  qc_dir: "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/qc_analysis/"
+
+# --- Guide-Seq Construct Structure ---
+# Complete sequences for the dual-guide amplicon used in guide-seq QC.
+#
+# Amplicon layout (5' → 3', ~287 bp):
+#   [R1_primer]─[gRNA₁(20/21)]─[stem₁(19)]─[iBAR₁(7)]─[tracr₁(~68)]─[tRNA_leader(6)]─[tRNA(~72)]─[gRNA₂(20/21)]─[stem₂(19)]─[iBAR₂(7)]─[tracr₂(~66)]
+guideseq:
+  # --- Stems (19 bp each) ---
+  stem_1: "GTTTGAGAGCTAAGCAGGA"   # variant A scaffold (pos1)
+  stem_2: "GTTTCAGAGCTATGCTGGA"   # variant B scaffold (pos2)
+
+  # --- Tracr sequences ---
+  tracr_1: "GACTGCTTAGCAAGTTCAAATAAGGCTGGTCCGTACACAACTTGGAAAAGTGGCAGCCGAGTCGGCTGC"
+  tracr_2: "AACAGCATAGCAAGTTGAAATAAGGCTAGTCCGTTATCAACTTGAAAAAGTGGCACCGAGTCGGTGC"
+
+  # --- tRNA linker ---
+  tRNA_leader: "AACAAA"
+  tRNA_seqs:
+    A: "GGGGGTATAGCTCAGTGGTAGAGCGCGTGCTTAGCATGCACGAGGTCCTGGGTTCGATCCCCAGTACCTCCA"
+    P: "GGCTCGTTGGTCTAGGGGTATGATTCTCGCTTAGGGTGCGAGAGGTCCCGGGTTCAAATCCCGGACGAGCCC"
+    Q: "GGTTCCATGGTGTAATGGTTAGCACTCTGGACTCTGAATCCAGCGATCCGAGTTCAAATCTCGGTGGAACCT"
+
+  # --- Sequencing primer anchors ---
+  R1_primer: "cgattcccggccaatgca"
+  R2_primer: "tttcaacttgctatgctgtt"
+
+  # --- Extraction parameters ---
+  grna_lengths: [20, 21]
+  ibar_length: 7
+  anchor_max_mm: 5
+  stem_max_mm: 5
+  tRNA_leader_max_mm: 1
+
+  # Max length of long anchors (tracr, tRNA) for scoring.
+  # Trims to keep the portion closest to gRNA (higher seq quality).
+  #   - tracr in R1: keep first max_anchor_length bp (5' end, near iBAR)
+  #   - tRNA in R2rc: keep last max_anchor_length bp (3' end, near gRNA)
+  # Set to 0 to use full-length anchors.
+  max_anchor_length: 20
+
+  # --- Pre-filter thresholds ---
+  min_r1_length: 65
+  min_r2_length: 69
+  max_consecutive_ns: 10
+
+# --- gRNA/iBAR Matching ---
+grna_matching:
+  max_lev_dist: 3
+  max_lev_dist_ibar: 3
+
+# --- QC Processing ---
+qc_processing:
+  max_reads: 0
+  n_workers: 8

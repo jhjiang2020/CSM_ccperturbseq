@@ -1,0 +1,103 @@
+# ==============================================================================
+# QC Pipeline Configuration — Guide-Seq & Library QC
+# ==============================================================================
+# This file contains configuration specific to the QC analysis pipeline
+# (Q1–Q3 quality checks on the gRNA library).
+#
+# It is loaded ON TOP OF the main config.yaml — any key present here
+# overrides the same key in config.yaml.  Keys not specified here are
+# inherited from config.yaml automatically.
+#
+# Usage:
+#   from scripts.qc_config_loader import load_qc_config
+#   cfg = load_qc_config('qc_config.yaml')   # merges with config.yaml
+# ==============================================================================
+
+# --- Reference to main config (resolved at load time) ---
+# Path to the single-cell pipeline config that this QC config extends.
+# Relative paths are resolved relative to THIS file's directory.
+base_config: "config.yaml"
+
+# --- Paths (QC-specific overrides / additions) ---
+paths:
+  # Directory containing guide-seq bulk FASTQ files (R1/R2 pairs)
+  guideseq_fastq_dir: "/medpop/rgupta/Jiahao/TIMI/CSM_guideseq/fastq/"
+  # Output directory for QC results
+  qc_dir: "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/qc_analysis/"
+
+# --- Guide-Seq Construct Structure ---
+# Complete sequences for the dual-guide amplicon used in guide-seq QC (Q3).
+#
+# Amplicon layout (5' → 3', ~287 bp):
+#   [R1_primer]─[spacer_1]─[stem_1]─[iBAR_1]─[tracr_1]─[tRNA_leader]─[tRNA]─[spacer_2]─[stem_2]─[iBAR_2]─[tracr_2]
+#
+# R1_primer and tracr_2 are sequencing primer regions (truncated versions
+# immediately upstream of spacer_1 / downstream of iBAR_2).
+# tracr_1, tRNA_leader, and tRNA_seqs should be COMPLETE sequences.
+guideseq:
+  # --- Stems (19 bp each) ---
+  stem_1: "GTTTGAGAGCTAAGCAGGA"   # variant A scaffold (pos1)
+  stem_2: "GTTTCAGAGCTATGCTGGA"   # variant B scaffold (pos2)
+
+  # --- Tracr sequences ---
+  # tracr_1: COMPLETE tracrRNA downstream of iBAR_1
+  tracr_1: "GACTGCTTAGCAAGTTCAAATAAGGCTGGTCCGTACACAACTTGGAAAAGTGGCAGCCGAGTCGGCTGC"
+
+  # tracr_2: COMPLETE tracrRNA downstream of iBAR_2
+  tracr_2: "AACAGCATAGCAAGTTGAAATAAGGCTAGTCCGTTATCAACTTGAAAAAGTGGCACCGAGTCGGTGC"
+
+  # --- tRNA linker (between pos1 and pos2 guide units) ---
+  # tRNA_leader: short leader between tracr_1 and tRNA body
+  # TODO: replace with actual ~6 bp sequence
+  tRNA_leader: "AACAAA"
+
+  # tRNA body sequences (one per variant: A, P, Q)
+  # TODO: replace with full ~72 bp sequences
+  tRNA_seqs:
+    A: "GGGGGTATAGCTCAGTGGTAGAGCGCGTGCTTAGCATGCACGAGGTCCTGGGTTCGATCCCCAGTACCTCCA"
+    P: "GGCTCGTTGGTCTAGGGGTATGATTCTCGCTTAGGGTGCGAGAGGTCCCGGGTTCAAATCCCGGACGAGCCC"
+    Q: "GGTTCCATGGTGTAATGGTTAGCACTCTGGACTCTGAATCCAGCGATCCGAGTTCAAATCTCGGTGGAACCT"
+
+  # --- Sequencing primer anchors ---
+  # (may contain small 5'/3' offset from lib prep artifacts)
+  # R1_primer: truncated R1 sequencing primer, immediately upstream of spacer_1
+  R1_primer: "cgattcccggccaatgca"
+
+  # R2_primer: sequencing primer embedded in R2.
+  # *** Provided in the ORIGINAL R2 orientation (reverse complement of the
+  # amplicon forward strand). The script will revcomp it when searching R2rc. ***
+  # TODO: user to fill in
+  R2_primer: "tttcaacttgctatgctgtt"
+
+  # --- Extraction parameters ---
+  grna_lengths: [20, 21]
+  ibar_length: 7
+  anchor_max_mm: 5       # max edit distance for R1/R2 primer, tracr, tRNA anchors
+  stem_max_mm: 5         # max edit distance for stem₁/stem₂ (only 3 distinguishing bases, increase this will increase ambiguous stem calls)
+  tRNA_leader_max_mm: 1  # max edit distance for 6bp tRNA_leader anchor
+
+  # --- Pre-filter thresholds ---
+  min_r1_length: 65      # R1_primer(18) + gRNA(20) + stem(19) + iBAR(7) = 64
+  min_r2_length: 69      # R2_primer(~21) + iBAR(7) + stem(19) + gRNA(21) = 68
+  max_consecutive_ns: 10
+
+# --- gRNA/iBAR Matching (can override main config) ---
+grna_matching:
+  max_lev_dist: 3
+  max_lev_dist_ibar: 3
+
+# --- Recombination Model (Q2) ---
+recombination:
+  moi: 0.089                    # Assumed MOI for the experiment
+  doublet_rate: 0.03            # Split-pool doublet rate
+  extended_model: true          # Fit extended model (r_swap, r12, r_del) vs simple (r)
+  decoupling_rate: 0.0          # Fixed gRNA-iBAR decoupling rate (from Q1 guide-seq)
+  run_threshold_sweep: true     # Run Part C UMI threshold sweep
+  umi_thresholds: [1, 2, 3, 4, 5, 8, 10]  # Thresholds to test
+
+# --- QC Processing ---
+qc_processing:
+  # Max reads to process per library (0 = all)
+  max_reads: 0
+  # Number of parallel workers
+  n_workers: 8
