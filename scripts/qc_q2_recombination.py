@@ -754,72 +754,240 @@ def count_model_categories(assignment_df, valid_bcs=None, granular=False):
         n_mc = n_mi = n_mm = 0
 
     return {
-        'perfect_singlet': n_perfect,
-        'inferred_singlet_pos1_missing': n_inf_pos1,
-        'inferred_singlet_pos2_missing': n_inf_pos2,
-        'multiplet_all_complete': n_mc,
-        'multiplet_all_inferred': n_mi,
-        'multiplet_mixed': n_mm,
-        'unassigned': n_unassigned,
-    }
+    'multiplet_mixed': n_mm,
+    'unassigned': n_unassigned,
+}
 
-def analyze_grna_ibar_pairing(umi_counts_path, ref_df, out_dir):
-    """Check gRNA-iBAR pairing correctness as decoupling QC."""
+def analyze_grna_ibar_pairing(umi_counts_path, ref_df, out_dir, valid_bcs=None, umi_thresholds=None, save_decoupled=True, return_df=True):
+    """Estimate gRNA-iBAR decoupling rate with subcategories across UMI thresholds.
+
+    Decoupling = the observed (grna_name, ibar_seq) pair is NOT in the reference,
+    meaning the guide unit identity has been disrupted.
+
+    Args:
+        umi_counts_path: str (path to CSV) or pandas.DataFrame containing UMI counts
+        ref_df: reference DataFrame
+        out_dir: output directory for the summary CSV
+        valid_bcs: optional list/set of valid barcodes to restrict analysis to
+        umi_thresholds: single int or list of ints to filter minimum UMIs. If None,
+                        defaults to a list from config or [1, 2, 3, 4, 5, 10, 20].
+        save_decoupled: whether to save a csv of all decoupled guides. Only applies
+                        if exactly one UMI threshold is specified.
+        return_df: whether to return the detached guides dataframe. Only applies
+                   if exactly one UMI threshold is specified.
+
+    Returns:
+        dict with 'summary_df' (DataFrame) containing stats per threshold, 
+        and optionally 'decoupled_df' (DataFrame if applicable).
+    """
     print("\n  Part B.2: gRNA-iBAR Pairing QC (Decoupling)")
 
-    ref_pairs = set()
+    if umi_thresholds is None:
+        try:
+            from scripts.qc_config_loader import load_qc_config
+            cfg = load_qc_config("config.yaml") # Try default config first
+            umi_thresholds = cfg.get('recombination', {}).get('umi_thresholds', [1, 2, 3, 4, 5, 10, 20])
+        except Exception:
+            umi_thresholds = [1, 2, 3, 4, 5, 10, 20]
+
+    if isinstance(umi_thresholds, (int, float)):
+        umi_thresholds = [int(umi_thresholds)]
+        
+    umi_thresholds = sorted(list(set(umi_thresholds)))
+    is_single_thresh = len(umi_thresholds) == 1
+    
+    if not is_single_thresh:
+        save_decoupled = False
+        return_df = False
+
+    # Build lookups from reference
+    ref_pairs = set()           
+    ref_ibar_to_grna = {}       
+    ref_all_ibars = set()       
     for _, row in ref_df.iterrows():
         ref_pairs.add((row['grna_name'], row['ibar_seq']))
+        ref_all_ibars.add(row['ibar_seq'])
+        ref_ibar_to_grna.setdefault(row['ibar_seq'], set()).add(row['grna_name'])
 
-    header = pd.read_csv(umi_counts_path, nrows=0).columns.tolist()
+    if isinstance(umi_counts_path, pd.DataFrame):
+        header = umi_counts_path.columns.tolist()
+        is_df = True
+    else:
+        header = pd.read_csv(umi_counts_path, nrows=0).columns.tolist()
+        is_df = False
+
     if 'ibar_seq_corrected' in header:
         ibar_col = 'ibar_seq_corrected'
     elif 'ibar_seq' in header:
         ibar_col = 'ibar_seq'
     else:
         print("    WARNING: No ibar column in UMI counts. Skipping.")
-        return pd.DataFrame()
+        return {'summary_df': pd.DataFrame()}
 
-    needed_cols = ['bc_wells', 'grna_name', ibar_col, 'umi_count', 'sublibrary']
+    needed_cols = ['bc_wells', 'grna_name', ibar_col, 'umi_count']
+    if 'pair_id' in header: needed_cols.append('pair_id')
+    if 'sample_name' in header: needed_cols.append('sample_name')
+    
     available = [c for c in needed_cols if c in header]
 
-    total_correct = 0
-    total_incorrect = 0
-    total_unmatched = 0
-
-    chunk_size = 1_000_000
-    for chunk in pd.read_csv(umi_counts_path, usecols=available, chunksize=chunk_size):
-        grnas = chunk['grna_name'].fillna('')
-        ibars = chunk[ibar_col].fillna('') if ibar_col in chunk else pd.Series([''] * len(chunk), index=chunk.index)
-
-        unmatched_mask = (grnas == '') | (ibars == '')
-        total_unmatched += unmatched_mask.sum()
-
-        valid_mask = ~unmatched_mask
-        if valid_mask.sum() > 0:
-            pairs = pd.Series(list(zip(grnas[valid_mask], ibars[valid_mask])))
-            correct_mask = pairs.isin(ref_pairs)
-            total_correct += correct_mask.sum()
-            total_incorrect += (~correct_mask).sum()
-
-    total = total_correct + total_incorrect + total_unmatched
-    print(f"    Total UMI-count entries:     {total:,}")
-    print(f"    Correct gRNA-iBAR pairs:     {total_correct:,} ({total_correct/total*100:.1f}%)")
-    print(f"    Incorrect (decoupled) pairs: {total_incorrect:,} ({total_incorrect/total*100:.1f}%)")
-    print(f"    Unmatched (missing iBAR):    {total_unmatched:,} ({total_unmatched/total*100:.1f}%)")
-
-    summary = pd.DataFrame([{
-        'level': 'grna_ibar',
-        'total': total,
-        'correct': total_correct,
-        'incorrect': total_incorrect,
-        'unmatched': total_unmatched,
-        'pct_correct': total_correct / total * 100 if total > 0 else 0,
-        'pct_incorrect': total_incorrect / total * 100 if total > 0 else 0,
-    }])
+    n_correct = {t: 0 for t in umi_thresholds}
+    n_wrong_target = {t: 0 for t in umi_thresholds}
+    n_ibar_missing = {t: 0 for t in umi_thresholds}
+    n_novel_ibar = {t: 0 for t in umi_thresholds}
     
-    summary.to_csv(os.path.join(out_dir, 'q2_decoupling_qc.csv'), index=False)
-    return summary
+    cell_has_decoupled = {t: set() for t in umi_thresholds}
+    cell_all = {t: set() for t in umi_thresholds}
+    
+    decoupled_records = []
+
+    if is_df:
+        chunks = [umi_counts_path[available]]
+    else:
+        chunk_size = 1_000_000
+        chunks = pd.read_csv(umi_counts_path, usecols=available, chunksize=chunk_size)
+
+    for chunk in chunks:
+        if valid_bcs is not None:
+            chunk = chunk[chunk['bc_wells'].isin(valid_bcs)]
+
+        g_arr = chunk['grna_name'].fillna('').values
+        ib_arr = chunk[ibar_col].fillna('').values
+        bc_arr = chunk['bc_wells'].values
+        umi_arr = chunk['umi_count'].values
+        
+        if save_decoupled or return_df:
+            pid_arr = chunk['pair_id'].values if 'pair_id' in chunk.columns else np.full(len(chunk), '')
+            sam_arr = chunk['sample_name'].values if 'sample_name' in chunk.columns else np.full(len(chunk), '')
+
+        for i in range(len(chunk)):
+            g = g_arr[i]
+            ib = ib_arr[i]
+            bc = bc_arr[i]
+            umi = umi_arr[i]
+            
+            if g == '':
+                continue
+            
+            cat = None
+            if ib == '': cat = 'ibar_missing'
+            elif (g, ib) in ref_pairs: cat = 'correct'
+            elif ib in ref_all_ibars: cat = 'wrong_target'
+            else: cat = 'novel_ibar'
+            
+            for t in umi_thresholds:
+                if umi >= t:
+                    cell_all[t].add(bc)
+                    if cat == 'correct':
+                        n_correct[t] += 1
+                    else:
+                        if cat == 'ibar_missing': n_ibar_missing[t] += 1
+                        elif cat == 'wrong_target': n_wrong_target[t] += 1
+                        elif cat == 'novel_ibar': n_novel_ibar[t] += 1
+                        cell_has_decoupled[t].add(bc)
+                
+            if is_single_thresh and (save_decoupled or return_df) and cat is not None and cat != 'correct':
+                t = umi_thresholds[0]
+                if umi >= t:
+                    grna_from_ibar = ','.join(ref_ibar_to_grna.get(ib, [])) if ib != '' else ''
+                    decoupled_records.append({
+                        'bc_wells': bc,
+                        'grna_name': g,
+                        'ibar_seq_corrected': ib,
+                        'pair_id': pid_arr[i],
+                        'grna_name_from_ibar': grna_from_ibar,
+                        'sample_name': sam_arr[i],
+                        'decoupling_category': cat,
+                        'umi_count': umi
+                    })
+
+    rows = []
+    for t in umi_thresholds:
+        nc = n_correct[t]
+        nwt = n_wrong_target[t]
+        nim = n_ibar_missing[t]
+        nni = n_novel_ibar[t]
+        
+        ntot = nc + nwt + nim + nni
+        ndec = nwt + nim + nni
+        ncells = len(cell_all[t])
+        ncells_dec = len(cell_has_decoupled[t])
+        rate = ncells_dec / ncells if ncells > 0 else 0.0
+        
+        rows.append({
+            'umi_threshold': t,
+            'total': ntot,
+            'correct': nc,
+            'decoupled_total': ndec,
+            'wrong_target': nwt,
+            'ibar_missing': nim,
+            'novel_ibar': nni,
+            'pct_correct': (nc / ntot * 100) if ntot > 0 else 0,
+            'pct_decoupled': (ndec / ntot * 100) if ntot > 0 else 0,
+            'n_cells': ncells,
+            'n_cells_decoupled': ncells_dec,
+            'cell_decoupling_rate': rate
+        })
+
+    summary = pd.DataFrame(rows)
+    summary.to_csv(os.path.join(out_dir, 'q2_decoupling_qc_summary.csv'), index=False)
+    
+    # Print basic output for terminal tracking (showing threshold=1 or latest)
+    def _pct(n, total): return f"{n/total*100:.2f}%" if total > 0 else "N/A"
+    t_print = umi_thresholds[0]  # Just print for the lowest threshold
+    print(f"    Total UMI entries (with gRNA match, >= {t_print} UMIs): {summary.loc[summary['umi_threshold']==t_print, 'total'].values[0]:,}")
+    print(f"    Cell-level decoupling rate at >= {t_print} UMIs:         {summary.loc[summary['umi_threshold']==t_print, 'cell_decoupling_rate'].values[0]:.4f} "
+          f"({summary.loc[summary['umi_threshold']==t_print, 'n_cells_decoupled'].values[0]:,}/{summary.loc[summary['umi_threshold']==t_print, 'n_cells'].values[0]:,} cells)")
+          
+    if not is_single_thresh:
+        print(f"    Tested {len(umi_thresholds)} UMI thresholds. Use plot_decoupling_vs_umi_threshold() to visualize.")
+
+    ret = {'summary_df': summary}
+    # For backward compatibility with existing main script, always return a default scalar rate (lowest threshold)
+    ret['cell_decoupling_rate'] = summary.loc[0, 'cell_decoupling_rate']
+    
+    if is_single_thresh:
+        decoupled_df = pd.DataFrame(decoupled_records) if decoupled_records else pd.DataFrame()
+        if return_df:
+            ret['decoupled_df'] = decoupled_df
+        if save_decoupled and not decoupled_df.empty:
+            out_file = os.path.join(out_dir, f"q2_decoupled_guides_min_umi_{umi_thresholds[0]}.csv")
+            decoupled_df.to_csv(out_file, index=False)
+            print(f"    Saved {len(decoupled_df):,} decoupled guides to {out_file}")
+
+    return ret
+
+def plot_decoupling_vs_umi_threshold(summary_df, save_path=None):
+    """Plot cell decoupling rate and total valid cells vs UMI threshold."""
+    if 'umi_threshold' not in summary_df.columns:
+        print("    WARNING: 'umi_threshold' column missing from summary.")
+        return None
+        
+    fig, ax1 = plt.subplots(figsize=(8, 5))
+    
+    color = 'tab:red'
+    ax1.set_xlabel('Minimum UMI Threshold', fontsize=12)
+    ax1.set_ylabel('Cell Decoupling Rate', color=color, fontsize=12)
+    ax1.plot(summary_df['umi_threshold'], summary_df['cell_decoupling_rate'], 
+             color=color, marker='o', linewidth=2)
+    ax1.tick_params(axis='y', labelcolor=color)
+    ax1.grid(True, linestyle='--', alpha=0.6)
+    
+    # Second y-axis for total cells remaining
+    ax2 = ax1.twinx()  
+    color2 = 'tab:blue'
+    ax2.set_ylabel('Total Valid Cells (Log10)', color=color2, fontsize=12)  
+    ax2.plot(summary_df['umi_threshold'], np.log10(np.maximum(summary_df['n_cells'], 1)), 
+             color=color2, marker='s', linestyle=':', linewidth=2)
+    ax2.tick_params(axis='y', labelcolor=color2)
+    
+    plt.title('Decoupling Rate vs Minimum UMI Threshold', fontsize=14)
+    fig.tight_layout()  
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"    Saved plot to {save_path}")
+        
+    return fig
 
 
 def plot_observed_vs_expected(res, save_path):
@@ -1067,7 +1235,9 @@ def main():
         dist_df.to_csv(os.path.join(out_dir, 'q2_guide_umi_distributions.csv'), index=False)
         
     # --- Part B ---
-    analyze_grna_ibar_pairing(umi_counts_path, ref_df, out_dir)
+    decouple_result = analyze_grna_ibar_pairing(umi_counts_path, ref_df, out_dir, valid_bcs=valid_bcs)
+    cell_decouple_rate = decouple_result['cell_decoupling_rate']
+    plot_decoupling_vs_umi_threshold(decouple_result['summary_df'], os.path.join(out_dir, 'q2_decoupling_vs_umi_threshold.png'))
     
     recomb_cfg = cfg.get('recombination', {})
     moi = recomb_cfg.get('moi', 0.3)
@@ -1088,12 +1258,20 @@ def main():
     res_gran['sample'] = 'All Cells'
     plot_observed_vs_expected(res_gran, os.path.join(out_dir, 'q2_observed_vs_expected_granular.png'))
     
+    # Print decoupling rate alongside r_swap for interpretation
+    r_swap_hat = res_gran['params'].get('r_swap', 0)
+    print(f"\n  --- Swap vs Decoupling Comparison ---")
+    print(f"    MLE r_swap (swap + decoupling):       {r_swap_hat:.4f}")
+    print(f"    Cell-level decoupling rate (from B.2): {cell_decouple_rate:.4f}")
+    print(f"    Estimated true recombination swap:     {max(0, r_swap_hat - cell_decouple_rate):.4f}")
+    
     # Save both results
     params_row = {'model': 'granular'}
     params_row.update(res_gran['params'])
     params_row['nll'] = res_gran['nll']
     params_row['bic'] = res_gran['bic']
     params_row['success'] = res_gran['success']
+    params_row['cell_decoupling_rate'] = cell_decouple_rate
     legacy_row = {'model': 'legacy'}
     legacy_row.update(res_legacy['params'])
     legacy_row['nll'] = res_legacy['nll']

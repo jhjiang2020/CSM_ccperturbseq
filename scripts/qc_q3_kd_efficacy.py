@@ -1632,7 +1632,16 @@ def compute_custom_combo_de(adata, cell_df, target_combos, readout_genes,
                         'log2FC': lfc, 'pvalue': pval, 'cohens_d': d,
                     })
 
-    return pd.DataFrame(gene_results), pd.DataFrame(guide_results)
+    gene_df = pd.DataFrame(gene_results)
+    guide_df = pd.DataFrame(guide_results)
+    
+    # Convert 'target_combo' and 'readout_gene' to ordered Categoricals to preserve input order
+    for df in [gene_df, guide_df]:
+        if not df.empty:
+            df['target_combo'] = pd.Categorical(df['target_combo'], categories=target_combos, ordered=True)
+            df['readout_gene'] = pd.Categorical(df['readout_gene'], categories=list(resolved.keys()), ordered=True)
+            
+    return gene_df, guide_df
 
 
 def plot_custom_combo_heatmap(result_df, save_path, title='Custom Combo KD',
@@ -1669,9 +1678,9 @@ def plot_custom_combo_heatmap(result_df, save_path, title='Custom Combo KD',
         if pivot_fc.empty:
             continue
 
-        # Sort axes
-        pivot_fc = pivot_fc.reindex(sorted(pivot_fc.index), axis=0)
-        pivot_fc = pivot_fc.reindex(sorted(pivot_fc.columns), axis=1)
+        # Reindex just to ensure both axes exist. Sorting alphabetically is omitted
+        # because the Categorical type handles intrinsic order.
+        pivot_fc = pivot_fc.sort_index(axis=0).sort_index(axis=1)
         pivot_n = pivot_n.reindex(pivot_fc.index, axis=0).reindex(pivot_fc.columns, axis=1)
         pivot_cpm = pivot_cpm.reindex(pivot_fc.index, axis=0).reindex(pivot_fc.columns, axis=1)
 

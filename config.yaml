@@ -178,7 +178,7 @@ grna_matching:
   # Default: 3. Set to 0 for exact matching only.
   max_lev_dist: 3
   # Maximum Levenshtein distance for iBAR matching (same logic as gRNA)
-  max_lev_dist_ibar: 3
+  max_lev_dist_ibar: 2
 
 # --- Cell-Level gRNA Assignment ---
 guide_assignment:

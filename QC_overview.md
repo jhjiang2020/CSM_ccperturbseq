@@ -31,13 +31,13 @@ Estimate construct recombination events and ambient guide noise from single-cell
 2.  **Guide UMI Distributions:** `compute_guide_umi_distributions()` estimates mean and std of log10(UMI) per guide unit from perfect singlets, producing inputs for optional GMM-based guide assignment refinement.
 
 ### Part B — Recombination Model (MLE) & Decoupling QC
-1.  **Multinomial MLE Model:** Fits theoretically predicted observable category proportions (perfect singlets, inferred singlets, multiplets, unassigned) against empirically observed cell counts, adjusting for MOI and split-pool doublet rates.
-    *   **Simple model:** Estimates dropout ($d$), silencing ($s$), and aggregate recombination ($r$).
-    *   **Extended model:** Decomposes recombination into swap ($r_\text{swap}$), 1→2 transfer ($r_{12}$), and deletion ($r_\text{del}$).
+1.  **Multinomial MLE Model:** Fits theoretically predicted observable category proportions against empirically observed cell counts, adjusting for MOI and split-pool doublet rates.
+    *   **Legacy Model (4-category):** Fits `perfect_singlet`, `inferred_singlet`, `multiplet`, `unassigned` to estimate global dropout ($d$), silencing ($s$), and aggregate recombination ($r$).
+    *   **Granular Model (7-category):** Expands observables to `perfect_singlet`, `inferred_singlet_pos1_missing`, `inferred_singlet_pos2_missing`, `multiplet_all_complete` (MOI), `multiplet_all_inferred` (swaps), `multiplet_mixed`, and `unassigned`. Accurately resolves recombination into swap ($r_\text{swap}$), 1→2 transfer ($r_{12}$), and position-specific deletion ($r_{\text{del}1}$, $r_{\text{del}2}$).
 2.  **Decoupling QC:** `analyze_grna_ibar_pairing()` checks gRNA-iBAR pairing correctness as a post-MLE quality check, detecting decoupling events that could inflate recombination estimates.
 
 ### Part C — UMI Threshold Sweep
-`sweep_umi_threshold()` re-runs dual-guide pair assignment at multiple UMI thresholds, fits the recombination model at each, and plots parameter sensitivity to the threshold choice.
+`sweep_umi_threshold()` re-runs dual-guide pair assignment at multiple UMI thresholds, fits the granular recombination model at each, and plots parameter sensitivity ($r_\text{swap}$, $r_{12}$, $r_{\text{del}1}$, $r_{\text{del}2}$) to the threshold choice.
 
 ---
 

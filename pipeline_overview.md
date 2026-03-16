@@ -622,3 +622,10 @@ Key sections of [config.yaml](file:///medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq
 - **Ambiguous Stem Handling**: When reads have equally good matches to both stem variants (`score_A == score_B`), they are now explicitly flagged as `AMBIGUOUS`. Previously, they arbitrarily tie-broke to `pos1`.
 - **Strict Disambiguation**: For shared gRNAs, if the stem is `AMBIGUOUS` and `iBAR` cannot resolve it, the read is now marked unresolved (preventing silent mis-assignment).
 - **Case-Insensitive Reference**: The pipeline now robustly handles user-provided reference CSVs (`grna_ibar_reference.csv`) containing lowercase sequences. All reference and query sequences are internally normalized to uppercase during extraction.
+
+### v0.4 — iBAR Unresolved Handling (2026-03-16)
+
+**Changes:**
+- **Retaining Unresolved iBARs**: For gRNAs where `ibar_seq_corrected` could not be resolved, the pipeline now keeps the raw iBAR sequence in a new mutually exclusive column `ibar_seq_unresolved`.
+- **Accurate UMI Deduplication**: UMI deduplication now groups reads utilizing both `ibar_seq_corrected` and `ibar_seq_unresolved`. This ensures that reads with distinct, unresolved raw iBAR sequences are correctly maintained as separate molecules rather than being falsely collapsed together into an empty iBAR bin, thus retaining quantitative accuracy.
+- **Output Format Update**: The `grna_umi_counts.csv` post-deduplication output file format is now saved directly as `grna_umi_counts.csv.gz` to improve storage efficiency across large single-cell datasets.

@@ -53,7 +53,9 @@ def stream_library_umi_dedup(match_path, lib_name, sample_name, sublib_index,
     t0 = time.time()
 
     # Columns we actually need (skip the rest to save memory)
-    needed_cols = list(set(group_cols + ['umi']))
+    needed_cols = list(set([c for c in group_cols if c != 'ibar_seq_unresolved'] + ['umi']))
+    if 'ibar_seq_unresolved' in group_cols and 'ibar_seq' not in needed_cols:
+        needed_cols.append('ibar_seq')
 
     # Accumulate UMI counts: {group_key_tuple: {umi_string: read_count}}
     umi_accum = defaultdict(Counter)
@@ -73,6 +75,13 @@ def stream_library_umi_dedup(match_path, lib_name, sample_name, sublib_index,
 
         unique_cells.update(chunk['bc_wells'].unique())
         unique_guides.update(chunk['grna_name'].unique())
+
+        if 'ibar_seq_unresolved' in group_cols:
+            chunk['ibar_seq_corrected'] = chunk['ibar_seq_corrected'].fillna('')
+            chunk['ibar_seq'] = chunk['ibar_seq'].fillna('')
+            unresolved_mask = chunk['ibar_seq_corrected'] == ''
+            chunk['ibar_seq_unresolved'] = ''
+            chunk.loc[unresolved_mask, 'ibar_seq_unresolved'] = chunk.loc[unresolved_mask, 'ibar_seq']
 
         # Accumulate UMI counts per group
         for row in chunk.itertuples(index=False):
@@ -592,10 +601,9 @@ def _determine_group_cols(match_path, dedup_ibar):
     header_cols = pd.read_csv(match_path, sep='\t', nrows=0).columns.tolist()
     if dedup_ibar:
         if 'ibar_seq_corrected' in header_cols:
-            ibar_col = 'ibar_seq_corrected'
+            return ['bc_wells', 'grna_name', 'target_gene', 'ibar_seq_corrected', 'ibar_seq_unresolved']
         else:
-            ibar_col = 'ibar_seq'
-        return ['bc_wells', 'grna_name', ibar_col, 'target_gene']
+            return ['bc_wells', 'grna_name', 'target_gene', 'ibar_seq']
     else:
         return ['bc_wells', 'grna_name', 'target_gene']
 
@@ -708,7 +716,7 @@ def main():
     if ref_df is not None:
         if dual_guide_mode:
             # Dual-guide mode: merge on BOTH grna_name and ibar_seq
-            ibar_cols = [c for c in group_cols if 'ibar' in c]
+            ibar_cols = [c for c in group_cols if 'ibar' in c and c != 'ibar_seq_unresolved']
             if not ibar_cols:
                 raise ValueError("dual_guide_mode requires umi_dedup_ibar to be true")
             ibar_col = ibar_cols[0]
@@ -730,7 +738,7 @@ def main():
 
     # Cell-level assignment
     if dual_guide_mode:
-        ibar_col = [c for c in group_cols if 'ibar' in c][0]
+        ibar_col = [c for c in group_cols if 'ibar' in c and c != 'ibar_seq_unresolved'][0]
         assignment_df = assign_dual_guide_pairs(
             deduped_df,
             ref_df=ref_df,
@@ -765,8 +773,8 @@ def main():
     print(f"\n  Saved assignment: {assign_path}")
 
     # 2. UMI-deduplicated counts (all, before thresholding)
-    dedup_path = os.path.join(assign_dir, 'grna_umi_counts.csv')
-    deduped_df.to_csv(dedup_path, index=False)
+    dedup_path = os.path.join(assign_dir, 'grna_umi_counts.csv.gz')
+    deduped_df.to_csv(dedup_path, index=False, compression='gzip')
     print(f"  Saved UMI counts: {dedup_path}")
 
     # 3. Guide UMI matrix (sparse MTX)

@@ -14,17 +14,17 @@ The model is a **forward simulation**: given parameters θ, we can generate synt
 graph LR
     subgraph "Parameters θ"
         P1["λ (MOI)"]
-        P2["r_swap, r₁₂, r_del"]
+        P2["r_swap, r₁₂, r_del1, r_del2"]
         P3["s (silencing)"]
-        P4["d (dropout)"]
+        P4["d (dropout, global)"]
         P5["δ (doublet rate)"]
     end
     subgraph "Forward Model"
-        F1["Per-construct<br/>signal probs"] --> F2["Per-cell probs<br/>(sum over k)"]
+        F1["Per-construct<br/>signal probs (5 categories)"] --> F2["Per-cell probs<br/>(sum over k, 7 categories)"]
         F2 --> F3["Doublet mixture<br/>(1-δ)·single + δ·merged"]
     end
     subgraph "Inference"
-        O["Observed counts<br/>n₁...n₆"] --> L["Multinomial<br/>likelihood"]
+        O["Observed counts<br/>n₁...n₇"] --> L["Multinomial<br/>likelihood"]
         F3 --> L
         L --> MLE["Maximize → θ̂"]
     end
@@ -44,7 +44,7 @@ def simulate_cell(θ):
 
     for each of k constructs:
         # 2. Recombination (mutually exclusive)
-        event = sample_categorical([p_intact, r_swap, r_swap, r₁₂, r_del, r_del])
+        event = sample_categorical([p_intact, r_swap_pos1, r_swap_pos2, r₁₂, r_del1, r_del2])
 
         # 3. Silencing
         if random() < s:
@@ -80,18 +80,24 @@ def simulate_cell(θ):
 
 ### Process 2: Guide Recombination
 
-Per construct, **mutually exclusive** outcomes (gRNA–iBAR move as unit when `c=0`):
+Each construct carries `[pos1_A, pos2_B]` where **A** and **B** are position-specific stem variants for the same `pair_id`. Per construct, **mutually exclusive** outcomes:
 
-| Outcome | Prob | Result |
-|---|---|---|
-| Intact | `p_int = 1-2r_swap-r₁₂-2r_del` | Original `[pos1, pos2]` |
-| Pos1 swapped | `r_swap` | `[pos1_foreign, pos2_orig]` — 2 pair_ids |
-| Pos2 swapped | `r_swap` | `[pos1_orig, pos2_foreign]` — 2 pair_ids |
-| Cross-pos swap | `r₁₂` | Both units from wrong positions — 2 pair_ids |
-| Pos1 deleted | `r_del` | Only pos2 remains |
-| Pos2 deleted | `r_del` | Only pos1 remains |
+| Outcome | Prob | Physical construct | After pipeline pairing logic |
+|---|---|---|---|
+| **Intact** | `p_int = 1-2r_swap-r₁₂-r_del1-r_del2` | `[pos1_A, pos2_B]` — original pair | Single `pair_id` |
+| **Pos1 swapped** | `r_swap` | `[pos1_A_foreign, pos2_B]` — foreign guide unit at pos1 | 2 incompatible `pair_id`s |
+| **Pos2 swapped** | `r_swap` | `[pos1_A, pos2_B_foreign]` — foreign guide unit at pos2 | 2 incompatible `pair_id`s |
+| **Cross-pos swap**| `r₁₂` | `[pos1_B, pos2_A]` — guide units swap positions; pos2-type at pos1 and vice versa | 2 incompatible `pair_id`s |
+| **Pos1 deleted** | `r_del1` | `[_, pos2_B]` — only pos2 guide unit remains | Single `pair_id`, pos1 missing |
+| **Pos2 deleted** | `r_del2` | `[pos1_A, _]` — only pos1 guide unit remains | Single `pair_id`, pos2 missing |
 
-Simple model: single `r = 2r_swap + r₁₂ + 2r_del`.
+> [!IMPORTANT]
+> **Guide unit = gRNA + stem + iBAR**. The pipeline resolves `pair_id` from the combined `(grna_name, ibar_seq)` identity via the reference. Therefore, `r_swap` as estimated by the model conflates **true recombination swaps** (a foreign guide unit physically replaces the original) **with gRNA-iBAR decoupling** (the gRNA and iBAR from the same position become separated, failing to map to the original `pair_id`).
+>
+> The decoupling rate can be estimated separately from `analyze_grna_ibar_pairing()` (Part B.2), which counts reads where the observed `(grna_name, ibar_seq)` combination is absent from the reference. This rate should be reported alongside `r_swap` to help interpret how much of the MLE-estimated swap rate is attributable to physical recombination vs. molecular decoupling.
+
+> [!NOTE]
+> **Swap Observability**: Because `assign_dual_guide_pairs` groups observations by `pair_id`, a swapped construct with *both* guides physically detected produces **two half-detected (inferred) pair records** (one per `pair_id`). It does *not* produce a mismatched complete pair. Some gRNA sequences are shared across positions; the pipeline uses iBAR matching and stem-variant disambiguation (Step 3) to resolve the correct `grna_name` and thus `pair_id` before this stage.
 
 ### Process 3: Construct Silencing
 
@@ -109,71 +115,48 @@ Rate `δ` (default 3%). A "cell" barcode actually contains **two independent cel
 
 ## Per-Construct Signal Probabilities
 
-For one construct, define the probability of each observable **signal type**:
+Tracing each outcome through silencing `s` (prob construct invisible) and global dropout `d` (prob guide independently drops out). Let `q = 1-s`, `p = 1-d`. The resulting 5 signal states for a single construct are:
 
-| Signal | Symbol | Expression |
-|---|---|---|
-| **Complete** (1 correct pair, both pos) | `P_C` | `q · p_int · p²` |
-| **Inferred** (1 pair_id, one pos) | `P_I` | `q · [p_int·2pd + 2r_swap·pd + r₁₂·2pd + 2r_del·p]` |
-| **Multiplet signal** (2 pair_ids) | `P_M` | `q · (2r_swap + r₁₂) · p²` |
-| **Invisible** (nothing detected) | `P_X` | `1 - P_C - P_I - P_M` |
+| Signal | Symbol | Expression | Sources |
+|---|---|---|---|
+| **Complete** | `P_C` | `q · p_int · p²` | Intact + both detected |
+| **Inf. (pos1 miss)** | `P_I₁` | `q·p·[(p_int + 2r_swap + r₁₂)d + r_del1]`| Only pos2 detected (from intact, swap, or pos1_del) |
+| **Inf. (pos2 miss)** | `P_I₂` | `q·p·[(p_int + 2r_swap + r₁₂)d + r_del2]`| Only pos1 detected (from intact, swap, or pos2_del) |
+| **Multiplet signal** | `P_M` | `q · (2r_swap + r₁₂) · p²` | Both sides of swap detected (yields 2 inferred pairs) |
+| **Invisible** | `P_X` | `1 - P_C - P_I₁ - P_I₂ - P_M` | Silenced, double dropout, or del+dropout |
 
-Where `q = 1-s`, `p = 1-d`.
-
-> [!NOTE]
-> `P_I` aggregates multiple origins: intact+one-dropout, swap+swapped-guide-dropout (swap hidden), cross-swap+one-dropout, and deletion. `P_X` includes silencing, double-dropout, and deletion+dropout.
-
-**Verification**: `P_C + P_I + P_M + P_X = 1` ✓
+**Verification**: `P_C + P_I₁ + P_I₂ + P_M + P_X = 1` ✓
 
 ---
 
 ## Single-Cell Classification (no doublet)
 
-### k=1
+Each of $k$ independent constructs produces one signal from $\{C, I_1, I_2, M, X\}$. The 7 cell-level categories depend on how many constructs are visible and their types.
 
-| Observable | Probability |
-|---|---|
-| Perfect singlet | `P_C` |
-| Inferred singlet | `P_I` |
-| Multiplet | `P_M` |
-| Unassigned | `P_X` |
+### Event Definitions
+- **perfect_singlet**: 1 $C$ visible, all rest $X$
+- **inferred_singlet_pos1_missing**: 1 $I_1$ visible, all rest $X$
+- **inferred_singlet_pos2_missing**: 1 $I_2$ visible, all rest $X$
+- **multiplet_all_complete**: $\ge2$ $C$ visible, no $I/M$ (true MOI)
+- **multiplet_all_inferred**: $\ge1$ $M$ visible OR $\ge2$ $I$ visible, no $C$ (swap/del products)
+- **multiplet_mixed**: $\ge1$ $C$ visible AND $\ge1$ $I/M$ visible
+- **unassigned**: All $k$ constructs are $X$
 
 ### k=2
 
-Two independent constructs. Classification depends on the **combination** of signals:
+### General $k$ Formulas
 
-| Construct 1 | Construct 2 | Classification | Prob (unordered) |
-|---|---|---|---|
-| C | X | **Perfect singlet** | `2·P_C·P_X` |
-| I | X | **Inferred singlet** | `2·P_I·P_X` |
-| C | C | **Multiplet** | `P_C²` |
-| C | I | **Multiplet** | `2·P_C·P_I` |
-| I | I | **Multiplet** | `P_I²` |
-| C | M | **Multiplet** | `2·P_C·P_M` |
-| I | M | **Multiplet** | `2·P_I·P_M` |
-| M | X | **Multiplet** | `2·P_M·P_X` |
-| M | M | **Multiplet** | `P_M²` |
-| X | X | **Unassigned** | `P_X²` |
-
-Aggregated:
-
-```
-P₂(singlet_perfect)  = 2·P_C·P_X
-P₂(singlet_inferred) = 2·P_I·P_X
-P₂(multiplet)        = (P_C + P_I + P_M)² - (2·P_C·P_X + 2·P_I·P_X + P_X²)
-                      = 1 - 2(P_C+P_I)·P_X - P_X²     [since P_C+P_I+P_M+P_X=1]
-P₂(unassigned)        = P_X²
+```text
+Pₖ(perfect_singlet)         = k · P_C · P_X^(k-1)
+Pₖ(inf_pos1_missing)        = k · P_I₁ · P_X^(k-1)
+Pₖ(inf_pos2_missing)        = k · P_I₂ · P_X^(k-1)
+Pₖ(multi_all_complete)      = (P_C + P_X)^k - k·P_C·P_X^(k-1) - P_X^k
+Pₖ(multi_all_inferred)      = (1 - P_C)^k - P_X^k - k·(P_I₁ + P_I₂)·P_X^(k-1)
+Pₖ(multi_mixed)             = 1 - (P_C + P_X)^k - (1 - P_C)^k + P_X^k
+Pₖ(unassigned)              = P_X^k
 ```
 
-### General k
-
-```
-Pₖ(singlet_perfect)  = k · P_C · P_X^(k-1)
-Pₖ(singlet_inferred) = k · P_I · P_X^(k-1)
-Pₖ(multiplet)        = 1 - k·(P_C+P_I)·P_X^(k-1) - (k choose 1)·P_M·P_X^(k-1) ... 
-```
-
-For practical purposes, truncate at k=3 (k≥4 negligible at λ≤0.5).
+For practical purposes, the model truncates the sum at $k_{max}=4$.
 
 ### Marginalizing over k
 
@@ -189,30 +172,18 @@ where `P(k|k≥1) = (λᵏe^{-λ}/k!) / (1-e^{-λ})`.
 
 With probability `δ`, a barcode represents **two independent cells** merged. Each cell is an independent draw from `P_single`. The merged classification depends on how their signals combine:
 
-### Doublet Convolution Table
+### Doublet Convolution Rules
 
-Let S = singlet (perfect or inferred), M = multiplet, U = unassigned for brevity.
+Two independent cells merge. For 7 categories, let `ps, pi1, pi2, mc, mi, mm, pu` be the single-cell probabilities, and let `pi = pi1 + pi2`.
 
-| Cell A | Cell B | Merged Classification |
-|---|---|---|
-| Perfect singlet | Unassigned | **Perfect singlet** |
-| Inferred singlet | Unassigned | **Inferred singlet** |
-| Perfect singlet | Perfect singlet | **Multiplet** |
-| Perfect singlet | Inferred singlet | **Multiplet** |
-| Inferred singlet | Inferred singlet | **Multiplet** |
-| Any visible | Multiplet | **Multiplet** |
-| Multiplet | Unassigned | **Multiplet** |
-| Unassigned | Unassigned | **Unassigned** |
-
-### Doublet Category Probabilities
-
-Define shorthand: `p_s = P_single(perfect)`, `p_i = P_single(inferred)`, `p_m = P_single(multiplet)`, `p_u = P_single(unassigned)`.
-
-```
-P_doublet(perfect_singlet)  = 2·p_s·p_u
-P_doublet(inferred_singlet) = 2·p_i·p_u
-P_doublet(multiplet)        = 1 - 2·p_s·p_u - 2·p_i·p_u - p_u²
-P_doublet(unassigned)        = p_u²
+```text
+P_dbl(perfect_singlet)     = 2·ps·pu
+P_dbl(inf_pos1_missing)    = 2·pi1·pu
+P_dbl(inf_pos2_missing)    = 2·pi2·pu
+P_dbl(multi_all_complete)  = ps² + 2·ps·mc + mc² + 2·mc·pu
+P_dbl(multi_all_inferred)  = pi² + 2·pi·mi + mi² + 2·mi·pu
+P_dbl(multi_mixed)         = 1 - [sum of all above] - pu²
+P_dbl(unassigned)          = pu²
 ```
 
 ### Final Observable Probabilities
@@ -228,14 +199,23 @@ P_obs(cat) = (1-δ) · P_single(cat) + δ · P_doublet(cat)
 
 ## Observable Categories for Counting
 
+7 categories parsed from the `grna_cell_assignment.csv`:
+
 | # | Category | Pipeline Definition |
 |---|---|---|
-| n₁ | **Perfect singlet** | 1 pair_id, both pos detected |
-| n₂ | **Inferred singlet** | 1 pair_id, one pos detected |
-| n₃ | **Multiplet** | ≥2 pair_ids detected |
-| n₄ | **Unassigned** | No gRNA detected |
+| n₁ | **perfect_singlet** | `combo_type='singlet'` + `detection_status='complete'` |
+| n₂ | **inferred_pos1_miss** | `combo_type='singlet'` + `detection_status='inferred'` + `pos1_umi=0` |
+| n₃ | **inferred_pos2_miss** | `combo_type='singlet'` + `detection_status='inferred'` + `pos2_umi=0` |
+| n₄ | **multiplet_all_comp** | `combo_type='multiplet'` + all pairs `detection_status='complete'` |
+| n₅ | **multiplet_all_inf** | `combo_type='multiplet'` + all pairs `detection_status='inferred'` |
+| n₆ | **multiplet_mixed** | `combo_type='multiplet'` + mix of complete/inferred |
+| n₇ | **unassigned** | GEX cell with no gRNA assignments |
 
-**Total**: N = n₁ + n₂ + n₃ + n₄
+**Total**: $N = \sum_{i=1}^7 n_i$.
+
+Degrees of freedom: 7 categories - 1 constraint = 6. 
+Parameters: `d, s, r_swap, r12, r_del1, r_del2` = 6.
+Model is exactly identified.
 
 ---
 
@@ -273,12 +253,12 @@ r ≈ (n₃_observed - n₃_expected_no_recomb) / (N · P(k=1|k≥1) · q · p²
 
 ### Full MLE
 
-Multinomial likelihood:
+Multinomial likelihood for the 7 categories:
 ```
-L(θ | n₁,n₂,n₃,n₄) = N! / (n₁!n₂!n₃!n₄!) · Π_i P_obs(cat_i | θ)^{nᵢ}
+L(θ | n₁...n₇) = N! / (n₁!...n₇!) · Π_i P_obs(cat_i | θ)^{nᵢ}
 ```
 
-Maximize log-likelihood with `scipy.optimize.minimize`, initialized from step-wise estimates. Confidence intervals from Fisher information matrix or profile likelihood.
+Maximize log-likelihood with `scipy.optimize.minimize`, initialized from heuristic step-wise estimates (d from singlet ratio, r_del asymmetry from n₂/n₃ ratio, r from multiplet surplus). Model comparison against a 4-category legacy model evaluates BIC to confirm usefulness of granular extension.
 
 ---
 

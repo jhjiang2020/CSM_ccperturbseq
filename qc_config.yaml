@@ -22,6 +22,8 @@ base_config: "config.yaml"
 paths:
   # Directory containing guide-seq bulk FASTQ files (R1/R2 pairs)
   guideseq_fastq_dir: "/medpop/rgupta/Jiahao/TIMI/CSM_guideseq/fastq/"
+  # Path to the gRNA+iBAR reference lookup table (CSV)
+  grna_reference: "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/references/grna_ibar_reference.csv"
   # Output directory for QC results
   qc_dir: "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/qc_analysis/"
 
@@ -84,7 +86,7 @@ guideseq:
 # --- gRNA/iBAR Matching (can override main config) ---
 grna_matching:
   max_lev_dist: 3
-  max_lev_dist_ibar: 3
+  max_lev_dist_ibar: 2
 
 # --- Recombination Model (Q2) ---
 recombination:
