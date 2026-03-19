@@ -149,7 +149,7 @@ def sample_r2_reads(fq2_path, n_sample=200_000):
 
 
 def process_grna_library(
-    fq1_path, fq2_path, output_path,
+    fq1_path, fq2_path, fout,
     bcinfo, bcutils_mod, cy_utils_mod,
     bc_max_edist=1, min_r1_len=20, min_r2_len=50,
     max_reads=0
@@ -159,7 +159,7 @@ def process_grna_library(
     Args:
         fq1_path: Path to gRNA R1 FASTQ (contains gRNA sequence)
         fq2_path: Path to gRNA R2 FASTQ (contains cell barcodes)
-        output_path: Path to write output TSV
+        fout: Open file handle to write output TSV
         bcinfo: BCInfo object with barcode data
         bcutils_mod: bcutils module
         cy_utils_mod: cy_utils module (or None)
@@ -200,75 +200,70 @@ def process_grna_library(
     stats = Counter()
     t_start = time.time()
 
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    with gzip.open(output_path, 'wt') as fout:
-        # Write header
-        fout.write("read_id\tbc_wells\tbc_bci\tumi\tr1_seq\tr1_qual\n")
+    for header1, seq1, qual1, seq2, qual2 in read_fastq_pairs(fq1_path, fq2_path, max_reads):
+        stats['total_reads'] += 1
 
-        for header1, seq1, qual1, seq2, qual2 in read_fastq_pairs(fq1_path, fq2_path, max_reads):
-            stats['total_reads'] += 1
+        # Check minimum lengths
+        if len(seq1) < min_r1_len or len(seq2) < min_r2_len:
+            stats['reads_too_short'] += 1
+            continue
 
-            # Check minimum lengths
-            if len(seq1) < min_r1_len or len(seq2) < min_r2_len:
-                stats['reads_too_short'] += 1
-                continue
-
-            # Extract barcodes from R2
-            if bc_offs is not None:
-                polyN, rbc1, rbc2, rbc3, no_ambigs = cy_utils_mod.extract_and_check(seq2, bc_offs)
-            else:
-                polyN, rbc1, rbc2, rbc3, no_ambigs = extract_and_check_pure_python(
-                    seq2, bc_starts, bc_ends
-                )
-
-            if not no_ambigs:
-                stats['reads_ambig_bc'] += 1
-                continue
-
-            # Correct barcodes
-            bc1, bc2, bc3, ed_max, ed_sum = bcutils_mod.correct_barcodes(
-                rbc1, rbc2, rbc3, counts, ct_thresh, bc_dicts, bc_max_edist
+        # Extract barcodes from R2
+        if bc_offs is not None:
+            polyN, rbc1, rbc2, rbc3, no_ambigs = cy_utils_mod.extract_and_check(seq2, bc_offs)
+        else:
+            polyN, rbc1, rbc2, rbc3, no_ambigs = extract_and_check_pure_python(
+                seq2, bc_starts, bc_ends
             )
 
-            if ed_max == 0:
-                stats['bc_edit_dist_0'] += 1
-            elif ed_max == 1:
-                stats['bc_edit_dist_1'] += 1
-            elif ed_max == 2:
-                stats['bc_edit_dist_2'] += 1
-            else:
-                stats['bc_edit_dist_NA'] += 1
+        if not no_ambigs:
+            stats['reads_ambig_bc'] += 1
+            continue
 
-            # Need all three barcodes
-            if not (bc1 and bc2 and bc3):
-                stats['reads_no_bc'] += 1
-                continue
+        # Correct barcodes
+        bc1, bc2, bc3, ed_max, ed_sum = bcutils_mod.correct_barcodes(
+            rbc1, rbc2, rbc3, counts, ct_thresh, bc_dicts, bc_max_edist
+        )
 
-            stats['reads_valid_barcode'] += 1
+        if ed_max == 0:
+            stats['bc_edit_dist_0'] += 1
+        elif ed_max == 1:
+            stats['bc_edit_dist_1'] += 1
+        elif ed_max == 2:
+            stats['bc_edit_dist_2'] += 1
+        else:
+            stats['bc_edit_dist_NA'] += 1
 
-            # Build cell identifier (same format as split-pipe)
-            w1 = bc1_seq_to_windzp[bc1]
-            w2 = bc2_seq_to_windzp[bc2]
-            w3 = bc3_seq_to_windzp[bc3]
-            bc_wells = f"{w1}_{w2}_{w3}"
+        # Need all three barcodes
+        if not (bc1 and bc2 and bc3):
+            stats['reads_no_bc'] += 1
+            continue
 
-            i1 = bc1_seq_to_bci[bc1]
-            i2 = bc2_seq_to_bci[bc2]
-            i3 = bc3_seq_to_bci[bc3]
-            bc_bci = f"{i1}_{i2}_{i3}"
+        stats['reads_valid_barcode'] += 1
 
-            # Extract read_id from header
-            read_id = header1.split()[0].lstrip('@')
+        # Build cell identifier (same format as split-pipe)
+        w1 = bc1_seq_to_windzp[bc1]
+        w2 = bc2_seq_to_windzp[bc2]
+        w3 = bc3_seq_to_windzp[bc3]
+        bc_wells = f"{w1}_{w2}_{w3}"
 
-            # Write output: read_id, bc_wells, bc_bci, umi (polyN), R1 seq, R1 qual
-            fout.write(f"{read_id}\t{bc_wells}\t{bc_bci}\t{polyN}\t{seq1}\t{qual1}\n")
+        i1 = bc1_seq_to_bci[bc1]
+        i2 = bc2_seq_to_bci[bc2]
+        i3 = bc3_seq_to_bci[bc3]
+        bc_bci = f"{i1}_{i2}_{i3}"
 
-            if stats['total_reads'] % 1_000_000 == 0:
-                elapsed = time.time() - t_start
-                rate = stats['total_reads'] / elapsed
-                valid_pct = stats['reads_valid_barcode'] / stats['total_reads'] * 100
-                print(f"  Processed {stats['total_reads']:,} reads "
-                      f"({rate:,.0f} reads/s, {valid_pct:.1f}% valid barcodes)")
+        # Extract read_id from header
+        read_id = header1.split()[0].lstrip('@')
+
+        # Write output: read_id, bc_wells, bc_bci, umi (polyN), R1 seq, R1 qual
+        fout.write(f"{read_id}\t{bc_wells}\t{bc_bci}\t{polyN}\t{seq1}\t{qual1}\n")
+
+        if stats['total_reads'] % 1_000_000 == 0:
+            elapsed = time.time() - t_start
+            rate = stats['total_reads'] / elapsed
+            valid_pct = stats['reads_valid_barcode'] / stats['total_reads'] * 100
+            print(f"  Processed {stats['total_reads']:,} reads "
+                  f"({rate:,.0f} reads/s, {valid_pct:.1f}% valid barcodes)")
 
     return dict(stats)
 
@@ -356,36 +351,52 @@ def main():
         print(f"  R1 files: {[f.name for f in r1_files]}")
         print(f"  R2 files: {[f.name for f in r2_files]}")
 
-        # Process each FASTQ pair
-        for fq1, fq2 in zip(r1_files, r2_files):
-            output_path = os.path.join(
-                output_dir, 'grna_barcodes', f"{lib_name}_barcodes.tsv.gz"
-            )
+        output_path = os.path.join(
+            output_dir, 'grna_barcodes', f"{lib_name}_barcodes.tsv.gz"
+        )
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-            print(f"\n  Processing: {fq1.name}")
-            stats = process_grna_library(
-                str(fq1), str(fq2), output_path,
-                bcinfo, bcutils_mod, cy_utils_mod,
-                bc_max_edist=bc_max_edist,
-                min_r1_len=min_r1_len,
-                min_r2_len=min_r2_len,
-                max_reads=max_reads
-            )
-            all_stats[lib_name] = stats
+        lib_stats = Counter()
+        reads_left = max_reads
 
-            # Print summary
-            total = stats.get('total_reads', 0)
-            valid = stats.get('reads_valid_barcode', 0)
-            pct = valid / total * 100 if total > 0 else 0
-            print(f"\n  Summary for {lib_name}:")
-            print(f"    Total reads:     {total:>12,}")
-            print(f"    Valid barcodes:  {valid:>12,} ({pct:.1f}%)")
-            print(f"    Too short:       {stats.get('reads_too_short', 0):>12,}")
-            print(f"    Ambiguous BC:    {stats.get('reads_ambig_bc', 0):>12,}")
-            print(f"    No BC match:     {stats.get('reads_no_bc', 0):>12,}")
-            print(f"    BC edit dist 0:  {stats.get('bc_edit_dist_0', 0):>12,}")
-            print(f"    BC edit dist 1:  {stats.get('bc_edit_dist_1', 0):>12,}")
-            print(f"    Output: {output_path}")
+        with gzip.open(output_path, 'wt') as fout:
+            # Write header
+            fout.write("read_id\tbc_wells\tbc_bci\tumi\tr1_seq\tr1_qual\n")
+
+            # Process each FASTQ pair
+            for fq1, fq2 in zip(r1_files, r2_files):
+                print(f"\n  Processing: {fq1.name}")
+                if max_reads > 0 and reads_left <= 0:
+                    print("  Reached max_reads limit. Skipping remaining files.")
+                    break
+
+                stats = process_grna_library(
+                    str(fq1), str(fq2), fout,
+                    bcinfo, bcutils_mod, cy_utils_mod,
+                    bc_max_edist=bc_max_edist,
+                    min_r1_len=min_r1_len,
+                    min_r2_len=min_r2_len,
+                    max_reads=reads_left
+                )
+                lib_stats.update(stats)
+                if max_reads > 0:
+                    reads_left -= stats.get('total_reads', 0)
+
+        all_stats[lib_name] = dict(lib_stats)
+
+        # Print summary
+        total = lib_stats.get('total_reads', 0)
+        valid = lib_stats.get('reads_valid_barcode', 0)
+        pct = valid / total * 100 if total > 0 else 0
+        print(f"\n  Summary for {lib_name} (Combined {len(r1_files)} files):")
+        print(f"    Total reads:     {total:>12,}")
+        print(f"    Valid barcodes:  {valid:>12,} ({pct:.1f}%)")
+        print(f"    Too short:       {lib_stats.get('reads_too_short', 0):>12,}")
+        print(f"    Ambiguous BC:    {lib_stats.get('reads_ambig_bc', 0):>12,}")
+        print(f"    No BC match:     {lib_stats.get('reads_no_bc', 0):>12,}")
+        print(f"    BC edit dist 0:  {lib_stats.get('bc_edit_dist_0', 0):>12,}")
+        print(f"    BC edit dist 1:  {lib_stats.get('bc_edit_dist_1', 0):>12,}")
+        print(f"    Output: {output_path}")
 
     # Save overall stats
     lib_label = getattr(args, 'library', None) or "all"

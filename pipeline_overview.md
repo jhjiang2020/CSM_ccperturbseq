@@ -148,6 +148,10 @@ Edit `config.yaml` to match your experiment:
 
 1. **Paths** — Set `project_dir`, `fastq_dir`, `splitpipe_dir`, `genome_dir`, `output_dir`, and `grna_reference`.
 2. **Libraries** — Define each sublibrary with `sublibrary_name`, `gex_prefix`, `grna_prefix`, and `sample_name`. Sublibraries sharing a `sample_name` (e.g., "Control") will be merged in Step 1b.
+   - **Important:** The pipeline searches for your FASTQ files using the shell pattern `*{prefix}*_R1_*.fastq.gz` (and `_R2_`). To verify that your prefix correctly matches the intended files, you can test it by running: 
+   ```bash
+   find /path/to/fastq -name "*<your_prefix>*_R1_*.fastq.gz"
+   ```
 3. **Design** (optional) — If you have a CSM design file from the [CROPseq-multi](https://github.com/rtwalton/CROPseq-multi) package, set `design.design_file` and run Step 0 to auto-generate the reference.
 
 ### 4. Running on UGER
@@ -203,6 +207,29 @@ After the pipeline completes, the primary output is:
 | `grna_umi_matrix.mtx` | `output/grna_assignment/` | Sparse UMI count matrix |
 | `qc_stats.yaml` | `output/grna_assignment/` | Pipeline QC metrics |
 
+### 6. Notes for Single-Guide Mode
+
+By default the pipeline expects dual_targart guide design with iBARs. To run the pipeline on a single-guide library (where a guide unit is simply `gRNA-stem-iBAR` or `gRNA-stem`):
+
+1. **Update `config.yaml`**: 
+   - Set `single_guide_mode: true` under `grna_structure`.
+   - If your library also lacks an iBAR, set `ibar_length: 0`.  
+2. **Library Design CSV**: 
+   - Provide a simple design CSV with columns `sgRNA_ID`, `spacer`, and `target` (and optionally `iBAR` if `ibar_length > 0`). 
+   - Run Step 0 with:
+    ```bash
+    conda activate splitpipe
+    python scripts/00_format_reference.py --config config.yaml
+    ```
+    The script will automatically resolve `mode` from the provided config file, but you can also manually specify `--mode single` when running this step.
+3. **Verify Read Structure**: 
+The pipeline locates gRNA(spacer) and iBAR from R1 of the gRNA library assuming the following read structure: 
+`variable_length`-`TSO(fixed_seq_1)`-`spacer`-`stem(fixed_seq_2/3)`-`iBAR`-`tracr(fixed_seq_4/5)`
+If you are not using the standard CROP-seq-multi vector, carefully check the R1 FASTQ from your gRNA library manually to:
+   - Verify that the gRNA sequence (spacer) is correctly bounded by the **TSO** (upstream) and the **stem** (downstream).
+   - If using iBARs, verify that the iBAR is correctly bounded by the **stem** (upstream) and the **tracr** (downstream).
+   - Update `fixed_seq_1` (TSO), `fixed_seq_2` (stem), and `fixed_seq_4` (tracr) in `config.yaml` with the exact sequences observed in your R1 reads. `fixed_seq_3` and `fixed_seq_5` will not be used in the single-guide mode and you may leave them empty. 
+
 ## UGER Job Dependency Chain
 
 ```mermaid
@@ -210,14 +237,14 @@ flowchart TD
     S0["Step 0 (manual)"] --> S3_arr
 
     subgraph GEX["GEX Branch"]
-        S1a["Step 1a: split-pipe<br>(array ×4)"]
+        S1a["Step 1a: split-pipe<br>(array ×N)"]
         S1b["Step 1b: combine"]
         S1a --> S1b
     end
 
     subgraph gRNA["gRNA Branch"]
-        S2_arr["Step 2: Extract BCs<br>(array ×4)"]
-        S3_arr["Step 3: Match gRNA+iBAR<br>(array ×4)"]
+        S2_arr["Step 2: Extract BCs<br>(array ×N)"]
+        S3_arr["Step 3: Match gRNA+iBAR<br>(array ×N)"]
         S4["Step 4: Assign to cells<br>(1 job, 4 CPUs)"]
         S2_arr --> S3_arr --> S4
     end
@@ -230,7 +257,8 @@ flowchart TD
 ```
 
 > [!TIP]
-> GEX and gRNA branches run in **parallel** — they only merge at Step 5.
+> GEX and gRNA branches run in **parallel** — they only merge at Step 5. 
+> You can test guide extraction and assignment with different parameters by re-runing Step 3, 4 and 5 with modified `config.yaml`.
 
 ---
 
@@ -304,15 +332,16 @@ python scripts/00_format_reference.py --check-only references/grna_ibar_referenc
 ## Step 1: GEX Processing (split-pipe)
 
 **Script**: [01_run_gex_splitpipe.sh](file:///medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/scripts/01_run_gex_splitpipe.sh)  
-**UGER**: Step 1a (array ×4) → Step 1b (combine), 64GB RAM, 16 threads
+**UGER**: Step 1a (array ×N) → Step 1b (combine), 64GB RAM, 16 threads
 
 Standard Parse Biosciences split-pipe processing of gene expression libraries.
+The array size N scales automatically based on the number of sublibraries in `config.yaml`.
 
 ```mermaid
 flowchart TD
-    subgraph Step1a["Step 1a: Per-sublibrary (array ×4)"]
+    subgraph Step1a["Step 1a: Per-sublibrary (array ×N)"]
         FQ[("GEX FASTQ<br>R1 + R2")] --> SP["split-pipe<br>--mode all"]
-        SP --> GEX[("gex_C1/<br>gex_C2/<br>gex_T1/<br>gex_T2/")]
+        SP --> GEX[("gex_sublib_1/<br>gex_sublib_2/...")]
     end
 
     subgraph Step1b["Step 1b: Combine"]
@@ -329,7 +358,7 @@ flowchart TD
 ## Step 2: Extract gRNA Barcodes
 
 **Script**: [02_extract_grna_barcodes.py](file:///medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/scripts/02_extract_grna_barcodes.py)  
-**UGER**: Array ×4, 32GB RAM, 8 processes
+**UGER**: Array ×N, 32GB RAM, 8 processes
 
 Extracts cell barcodes from gRNA library R2 using Parse Biosciences barcode correction logic, producing a TSV linking each read to its cell identity.
 
@@ -350,7 +379,7 @@ flowchart TD
     VALID -->|No| SKIP
     VALID -->|Yes| BUILD["Build bc_wells<br>= w1_w2_w3"]
 
-    BUILD --> OUT[("grna_barcodes/<br>C1_grna_barcodes.tsv.gz<br>Cols: read_id, bc_wells,<br>bc_bci, umi, r1_seq, r1_qual")]
+    BUILD --> OUT[("grna_barcodes/<br>sublib_1_grna_barcodes.tsv.gz<br>Cols: read_id, bc_wells,<br>bc_bci, umi, r1_seq, r1_qual")]
 
     style FQ1 fill:#e3f2fd
     style FQ2 fill:#e3f2fd
@@ -362,7 +391,7 @@ flowchart TD
 ## Step 3: Match gRNA + iBAR
 
 **Script**: [03_match_grna_ibar.py](file:///medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/scripts/03_match_grna_ibar.py)  
-**UGER**: Array ×4, 64GB RAM, 8 processes (multiprocessing)
+**UGER**: Array ×N, 64GB RAM, 8 processes (multiprocessing)
 
 The most complex step — locates the gRNA and iBAR within each R1 read, then fuzzy-matches against the reference.
 
@@ -385,7 +414,7 @@ flowchart TD
         IBAR_W --> RESOLVE
     end
 
-    RESOLVE --> OUT[("grna_matches/<br>C1_grna_matches.tsv.gz<br>~17 columns per read")]
+    RESOLVE --> OUT[("grna_matches/<br>sublib_1_grna_matches.tsv.gz<br>~17 columns per read")]
 
     style BC fill:#e3f2fd
     style REF fill:#e3f2fd
@@ -436,17 +465,16 @@ Collapses read-level matches to cell-level gRNA assignments via **streaming UMI 
 
 ```mermaid
 flowchart TD
-    subgraph Stream["Streaming UMI Dedup (per library, ×4 parallel)"]
+    subgraph Stream["Streaming UMI Dedup (per library, ×N parallel)"]
         MATCH[(".tsv.gz<br>match file")] --> CHUNKS["Read 500K-row<br>chunks"]
         CHUNKS --> ACCUM["Accumulate<br>{(cell, guide, ibar, target):<br>{umi: read_count}}"]
         ACCUM --> COLLAPSE["Directional UMI<br>collapsing (Hamming ≤ 1)"]
         COLLAPSE --> DEDUP[("Per-library<br>deduped DataFrame")]
     end
 
-    C1[("C1 matches<br>273MB gz")] --> Stream
-    C2[("C2 matches<br>636MB gz")] --> Stream
-    T1[("T1 matches<br>472MB gz")] --> Stream
-    T2[("T2 matches<br>378MB gz")] --> Stream
+    C1[("sublib_1 matches<br>273MB gz")] --> Stream
+    C2[("sublib_2 matches<br>636MB gz")] --> Stream
+    TN[("... matches<br>...MB gz")] --> Stream
 
     DEDUP --> CONCAT["Concatenate<br>deduped results"]
     CONCAT --> ASSIGN["Assign guides to cells<br>(UMI threshold ≥ 5)"]
@@ -572,10 +600,10 @@ Key sections of [config.yaml](file:///medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq
 
 | Step | Memory | CPUs | Runtime | Job Type |
 |---|---|---|---|---|
-| 1a (GEX) | 64GB | 16 | 24h | Array ×4 |
+| 1a (GEX) | 64GB | 16 | 24h | Array ×N |
 | 1b (Combine) | 64GB | 16 | 6h | Single |
-| 2 (Barcodes) | 32GB | 8 | 12h | Array ×4 |
-| 3 (Matching) | 64GB | 8 | 12h | Array ×4 |
+| 2 (Barcodes) | 32GB | 8 | 12h | Array ×N |
+| 3 (Matching) | 64GB | 8 | 12h | Array ×N |
 | 4 (Assignment) | 32GB | 4 | 4h | Single |
 | 5 (AnnData) | 16GB | 1 | 1h | Single |
 
@@ -629,3 +657,18 @@ Key sections of [config.yaml](file:///medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq
 - **Retaining Unresolved iBARs**: For gRNAs where `ibar_seq_corrected` could not be resolved, the pipeline now keeps the raw iBAR sequence in a new mutually exclusive column `ibar_seq_unresolved`.
 - **Accurate UMI Deduplication**: UMI deduplication now groups reads utilizing both `ibar_seq_corrected` and `ibar_seq_unresolved`. This ensures that reads with distinct, unresolved raw iBAR sequences are correctly maintained as separate molecules rather than being falsely collapsed together into an empty iBAR bin, thus retaining quantitative accuracy.
 - **Output Format Update**: The `grna_umi_counts.csv` post-deduplication output file format is now saved directly as `grna_umi_counts.csv.gz` to improve storage efficiency across large single-cell datasets.
+
+### v1.0 — Single-Guide & No-iBAR Modes (2026-03-17)
+
+**Changes:**
+- **Single-Guide Mode**: Added robust support for single-guide libraries via `single_guide_mode: true` under `grna_structure` in `config.yaml`. The pipeline safely bypasses dual-specific matching steps (stem2, tracr2, inferred pairing) and employs a streamlined `assign_single_guides()` assignment algorithm. 
+- **Optional iBAR Support**: The pipeline now seamlessly supports processing libraries without iBARs. Setting `ibar_length: 0` natively skips all iBAR-based extraction, fuzzy matching, disambiguation, and UMI grouping logic.
+- **Consolidated Metadata**: The final AnnData builder (`05_build_anndata.py`) intelligently aligns detection semantics between dual and single mode, populating compatible `combo_type`, `n_guides`, and unified single-guide metadata mappings.
+- **Revised UGER Submission Wrapper**: Now support custom conda environment names, which can be set under the `environment` section in `config.yaml`.
+
+### v1.1 — Multi-FASTQ Support (2026-03-19)
+
+**Changes:**
+- **Graceful Multi-FASTQ Handling**: Added native support for processing multiple lane FASTQ files corresponding to a single sublibrary. Users can now provide a `gex_prefix` or `grna_prefix` that utilizes standard shell wildcard globbing (e.g., `library_S*_L00*` to match `L001`, `L002` lane files simultaneously). The pipeline locates matching files using the pattern `*{prefix}*_R1_*.fastq.gz`. To verify your pattern works, test it with: `find /path/to/fastq_dir -name "*<prefix>*_R1_*.fastq.gz"`. The pipeline aggregates all matched files seamlessly without overwriting outputs.
+- **Step 1a (split-pipe) Update**: Replaced `head -1` discovery. Step 1a now groups the full list of matched GEX `_R1_` and `_R2_` FASTQ files and passes them simultaneously into the `split-pipe` execution command.
+- **Step 2 (Barcode Extraction) Update**: Refactored the internal file loop. The script now establishes a single `.tsv.gz` writable stream per sublibrary and continuously appends the barcode extraction data across all matching gRNA FASTQ pairs, eliminating catastrophic overwrites.

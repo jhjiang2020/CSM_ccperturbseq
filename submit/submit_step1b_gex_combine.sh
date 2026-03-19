@@ -23,11 +23,23 @@ else
     CONFIG="$(dirname "${SUBMIT_DIR}")/config.yaml"
 fi
 
-# Initialize conda (must happen before any python3 calls)
-eval "$($HOME/my-conda/condabin/conda shell.bash hook)"
-conda activate splitpipe
+# --- Resolve project dir: env var > config (grep) > dirname(config) ---
+if [[ -n "${CSM_PROJECT_DIR:-}" ]]; then
+    PROJECT_DIR="${CSM_PROJECT_DIR}"
+else
+    PROJECT_DIR=$(grep '^ *project_dir:' "${CONFIG}" | head -1 | sed 's/.*: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/')
+fi
+SCRIPTS_DIR="${PROJECT_DIR}/scripts"
 
-LOG_DIR=$(python3 -c "import yaml; print(yaml.safe_load(open('${CONFIG}'))['paths'].get('log_dir', '$(dirname "${CONFIG}")/logs'))")
+# --- Initialize conda (parsed from config via grep — no python3 needed yet) ---
+_CONDA_PREFIX=$(grep '^ *conda_prefix:' "${CONFIG}" | head -1 | sed 's/.*: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/')
+_CONDA_ENV=$(grep '^ *conda_env:' "${CONFIG}" | head -1 | sed 's/.*: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/')
+CONDA_PREFIX="${_CONDA_PREFIX:-$HOME/my-conda}"
+CONDA_ENV="${_CONDA_ENV:-splitpipe}"
+eval "$(${CONDA_PREFIX}/condabin/conda shell.bash hook)"
+conda activate "${CONDA_ENV}"
+
+LOG_DIR=$(python3 -c "import yaml; print(yaml.safe_load(open('${CONFIG}'))['paths'].get('log_dir', '${PROJECT_DIR}/logs'))")
 mkdir -p "${LOG_DIR}"
 
 echo "=========================================="
@@ -68,7 +80,7 @@ for d in ${SUBLIB_DIRS}; do
 done
 
 # Execute the custom python wrapper that patches split-pipe's list-index bug at runtime
-python3 "$(dirname "${CONFIG}")/scripts/splitpipe_wrapper.py" \
+python3 "${SCRIPTS_DIR}/splitpipe_wrapper.py" \
     --mode comb \
     --sublibraries ${SUBLIB_DIRS} \
     --output_dir "${COMB_OUT}" \

@@ -218,7 +218,7 @@ def main():
     print("\n  6. Adding gRNA information to AnnData...")
 
     # Create per-cell summary from assignment data
-    is_dual = 'combo_type' in assign_df.columns
+    is_dual = 'detection_status' in assign_df.columns
 
     if is_dual:
         agg_dict = {
@@ -265,13 +265,13 @@ def main():
         adata.obs['has_grna'] = adata.obs['target_gene'] != 'unassigned'
         
     else:
-        # Legacy single-guide aggregation
+        # Single-guide metadata aggregation
         agg_dict = {
             'grna_names': ('grna_name', lambda x: ','.join(sorted(x.unique()))),
             'target_genes': ('target_gene', lambda x: ','.join(sorted(x.unique()))),
             'total_grna_umi': ('umi_count', 'sum'),
             'n_guides': ('grna_name', 'nunique'),
-            'assignment_type': ('assignment_type', 'first'),
+            'combo_type': ('combo_type', 'first'),
         }
         if 'ibar_seq' in assign_df.columns:
             agg_dict['ibar_seqs'] = ('ibar_seq', lambda x: ','.join(sorted(x.unique())))

@@ -364,14 +364,12 @@ def extract_grna_ibar(
         or None if extraction fails.
     """
     # Normalize user-provided reference sequences to uppercase
-    r1_seq = r1_seq.upper()
-    tso_seq = tso_seq.upper()
-    stem1 = stem1.upper()
-    stem2 = stem2.upper()
-    if tracr1:
-        tracr1 = tracr1.upper()
-    if tracr2:
-        tracr2 = tracr2.upper()
+    r1_seq = r1_seq.upper() if r1_seq else ""
+    tso_seq = tso_seq.upper() if tso_seq else ""
+    stem1 = stem1.upper() if stem1 else ""
+    stem2 = stem2.upper() if stem2 else ""
+    tracr1 = tracr1.upper() if tracr1 else ""
+    tracr2 = tracr2.upper() if tracr2 else ""
 
     # Step 1: Find TSO
     tso_end, tso_dist = find_tso(r1_seq, tso_seq, max_dist=tso_max_dist)
@@ -395,15 +393,21 @@ def extract_grna_ibar(
 
         stem_observed = r1_seq[stem_start:stem_end]
         mm_stem1 = hamming_distance(stem_observed, stem1, anchor_max_mm + 1)
-        mm_stem2 = hamming_distance(stem_observed, stem2, anchor_max_mm + 1)
+        if stem2:
+            mm_stem2 = hamming_distance(stem_observed, stem2, anchor_max_mm + 1)
+        else:
+            mm_stem2 = anchor_max_mm + 2
 
         # Compute tracr mismatches if available
         mm_tracr1, mm_tracr2 = 0, 0
         has_tracr = False
-        if tracr1 and tracr2 and ibar_end + tracr_len <= len(r1_seq):
+        if tracr1 and ibar_end + tracr_len <= len(r1_seq):
             tracr_observed = r1_seq[ibar_end:ibar_end + tracr_len]
             mm_tracr1 = hamming_distance(tracr_observed, tracr1, anchor_max_mm + 1)
-            mm_tracr2 = hamming_distance(tracr_observed, tracr2, anchor_max_mm + 1)
+            if tracr2:
+                mm_tracr2 = hamming_distance(tracr_observed, tracr2, anchor_max_mm + 1)
+            else:
+                mm_tracr2 = anchor_max_mm + 2
             has_tracr = True
 
         # Combined scores for all 4 combinations
@@ -512,16 +516,21 @@ def _init_worker(config_dict):
     _worker_state['grna_to_ibars'] = config_dict['grna_to_ibars']
     _worker_state['max_lev_ibar'] = config_dict['max_lev_ibar']
     _worker_state['grna_name_to_position'] = config_dict['grna_name_to_position']
+    _worker_state['single_guide_mode'] = config_dict.get('single_guide_mode', False)
+    _worker_state['seq_id_to_names'] = config_dict['seq_id_to_names']
 
     # Build matchers ONCE per worker
     _worker_state['grna_matcher'] = NeighborhoodMatcher(
         config_dict['grna_seqs'], config_dict['grna_names'],
         max_dist=config_dict['max_lev_grna']
     )
-    _worker_state['ibar_matcher'] = NeighborhoodMatcher(
-        config_dict['ibar_seqs'], config_dict['ibar_names'],
-        max_dist=config_dict['max_lev_ibar']
-    )
+    if config_dict['ibar_length'] > 0:
+        _worker_state['ibar_matcher'] = NeighborhoodMatcher(
+            config_dict['ibar_seqs'], config_dict['ibar_names'],
+            max_dist=config_dict['max_lev_ibar']
+        )
+    else:
+        _worker_state['ibar_matcher'] = None
 
 
 def _resolve_shared_grna(candidate_names, ibar_seq, variant, grna_to_ibars,
@@ -595,6 +604,8 @@ def _process_rows(rows):
     grna_to_ibars = ws['grna_to_ibars']
     max_lev_ibar = ws['max_lev_ibar']
     grna_name_to_position = ws['grna_name_to_position']
+    single_guide_mode = ws['single_guide_mode']
+    seq_id_to_names = ws['seq_id_to_names']
 
     stats = Counter()
     results = []
@@ -643,15 +654,31 @@ def _process_rows(rows):
             continue
 
         # 2. Fuzzy match gRNA
-        grna_match_result, grna_dist, grna_unique = grna_matcher.match(grna_seq)
+        grna_match_raw, grna_dist, grna_seq_unique = grna_matcher.match(grna_seq)
 
-        if grna_match_result is None:
-            stats['grna_no_match'] += 1
+        if grna_match_raw is None:
+            if grna_dist is not None:
+                stats['grna_ambiguous'] += 1
+            else:
+                stats['grna_no_match'] += 1
             continue
+
+        # Map seq_id back to grna_names
+        candidate_names = seq_id_to_names[grna_match_raw]
+        if len(candidate_names) == 1:
+            grna_match_result = candidate_names[0]
+            grna_unique = True
+        else:
+            grna_match_result = candidate_names
+            grna_unique = False
 
         # 3. Handle shared gRNA sequences (position-ambiguous)
         if isinstance(grna_match_result, list):
-            # Multiple grna_names share this sequence — disambiguate
+            if single_guide_mode:
+                stats['grna_ambiguous'] += 1
+                continue
+            
+            # Multiple grna_names share this sequence — disambiguate (dual mode)
             stats['shared_grna_hit'] += 1
             grna_name, resolution, ibar_guide, ibar_dist_guide = _resolve_shared_grna(
                 grna_match_result, ibar_seq, variant,
@@ -673,6 +700,21 @@ def _process_rows(rows):
             continue
 
         # 4. Fuzzy match iBAR — dual matching (global + within-guide)
+        if ibar_length == 0:
+            target_gene = ref_grna_to_target.get(grna_name)
+            if target_gene is None:
+                stats['grna_name_not_in_ref'] += 1
+                continue
+            
+            match_type = f"grna_only_d{grna_dist}"
+            stats['grna_only_match'] += 1
+            results.append((
+                read_id, bc_wells, bc_bci, umi, grna_name, grna_seq,
+                '', target_gene, grna_dist, -1, match_type,
+                variant, grna_len, '', '',
+                '', False,
+            ))
+            continue
         ibar_global, ibar_dist_global, ibar_unique_global = ibar_matcher.match(ibar_seq)
 
         target_gene = ref_grna_to_target.get(grna_name)
@@ -893,11 +935,12 @@ def main():
     gm = cfg['grna_matching']
     n_processes = args.n_processes or cfg['barcode_extraction'].get('n_processes', 1)
 
+    single_guide_mode = gs.get('single_guide_mode', False)
     tso_seq = gs['fixed_seq_1']
     stem1 = gs['fixed_seq_2']
-    stem2 = gs['fixed_seq_3']
-    tracr1 = gs['fixed_seq_4']
-    tracr2 = gs['fixed_seq_5']
+    stem2 = gs.get('fixed_seq_3', None) if not single_guide_mode else None
+    tracr1 = gs.get('fixed_seq_4', None)
+    tracr2 = gs.get('fixed_seq_5', None) if not single_guide_mode else None
     grna_lengths = gs['grna_lengths']
     ibar_length = gs['ibar_length']
     anchor_max_mm = gs['fixed_seq_max_mismatches']
@@ -937,23 +980,29 @@ def main():
     for _, row in ref_df.iterrows():
         grna_name_to_position[row['grna_name']] = row['position']
 
-    # Pass entries deduplicated by grna_name (not grna_seq) so duplicate sequences
-    # at different positions are both present and returned as position-ambiguous.
-    # Without this, drop_duplicates('grna_seq') silently drops one position.
+    # Deduplicate gRNA sequences for NeighborhoodMatcher efficiency
+    # Map each unique seq to an internal seq_id, and track all grna_names it belongs to.
     grna_dedup = ref_df.drop_duplicates('grna_name')
-    grna_seqs = grna_dedup['grna_seq'].tolist()
-    grna_names = grna_dedup['grna_name'].tolist()
+    grna_seq_to_names = defaultdict(list)
+    for _, row in grna_dedup.iterrows():
+        grna_seq_to_names[row['grna_seq']].append(row['grna_name'])
+        
+    unique_grna_seqs = list(grna_seq_to_names.keys())
+    unique_seq_ids = list(range(len(unique_grna_seqs)))
+    seq_id_to_names = {i: names for i, names in zip(unique_seq_ids, grna_seq_to_names.values())}
+
     ibar_seqs = ref_df['ibar_seq'].unique().tolist()
 
     # Detect shared gRNA sequences
-    grna_seq_counts = ref_df.drop_duplicates('grna_name').groupby('grna_seq')['grna_name'].count()
+    grna_seq_counts = grna_dedup.groupby('grna_seq')['grna_name'].count()
     shared_grna_seqs = grna_seq_counts[grna_seq_counts > 1]
 
     print("  Building matchers...")
-    grna_matcher = NeighborhoodMatcher(grna_seqs, grna_names, max_dist=gm['max_lev_dist'])
-    ibar_matcher = NeighborhoodMatcher(ibar_seqs, ibar_seqs, max_dist=gm['max_lev_dist_ibar'])
-    n_unique_grna = ref_df['grna_seq'].nunique()
-    print(f"    gRNA: {n_unique_grna} unique sequences ({len(grna_seqs)} entries)")
+    grna_matcher = NeighborhoodMatcher(unique_grna_seqs, unique_seq_ids, max_dist=gm['max_lev_dist'])
+    if ibar_length > 0:
+        ibar_matcher = NeighborhoodMatcher(ibar_seqs, ibar_seqs, max_dist=gm['max_lev_dist_ibar'])
+    n_unique_grna = len(unique_grna_seqs)
+    print(f"    gRNA: {n_unique_grna} unique sequences ({len(grna_dedup)} initial entries)")
     if len(shared_grna_seqs) > 0:
         n_shared = len(shared_grna_seqs)
         n_affected = ref_df[ref_df['grna_seq'].isin(shared_grna_seqs.index)]['grna_name'].nunique()
@@ -970,12 +1019,14 @@ def main():
         'anchor_max_mm': anchor_max_mm, 'tso_max_dist': tso_max_dist,
         'max_lev_grna': gm['max_lev_dist'],
         'max_lev_ibar': gm['max_lev_dist_ibar'],
-        'grna_seqs': grna_seqs, 'grna_names': grna_names,
+        'grna_seqs': unique_grna_seqs, 'grna_names': unique_seq_ids,
+        'seq_id_to_names': seq_id_to_names,
         'ibar_seqs': ibar_seqs, 'ibar_names': ibar_seqs,
         'combined_lookup': combined_lookup,
         'ref_grna_to_target': ref_grna_to_target,
         'grna_to_ibars': grna_to_ibars,
         'grna_name_to_position': grna_name_to_position,
+        'single_guide_mode': single_guide_mode,
     }
 
     libraries = cfg['libraries']

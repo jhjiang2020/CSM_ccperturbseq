@@ -189,10 +189,10 @@ def _directional_umi_collapse(umi_counts, max_edits=1):
     return n_clusters
 
 
-def _assign_guides_legacy(deduped_df, min_umi_threshold=5,
+def assign_single_guides(deduped_df, min_umi_threshold=5,
                            multiplet_strategy='all',
                            min_dominance_fraction=0.0):
-    """Assign guides to cells based on UMI counts and threshold.
+    """Assign individual guides to cells (Single Guide Mode).
 
     Args:
         deduped_df: UMI-deduplicated DataFrame
@@ -201,12 +201,12 @@ def _assign_guides_legacy(deduped_df, min_umi_threshold=5,
         min_dominance_fraction: For 'top' strategy, minimum fraction of total UMIs
 
     Returns:
-        DataFrame with per-cell guide assignments
+        DataFrame with per-cell guide assignments formatted for single-guide mode.
     """
     # Filter by UMI threshold
     above_thresh = deduped_df[deduped_df['umi_count'] >= min_umi_threshold].copy()
 
-    print(f"\n  Guide assignment (threshold={min_umi_threshold}):")
+    print(f"\n  Single-guide assignment (threshold={min_umi_threshold}):")
     print(f"    Entries above threshold: {len(above_thresh):,} "
           f"(of {len(deduped_df):,})")
     print(f"    Cells with ≥1 guide:    {above_thresh['bc_wells'].nunique():,}")
@@ -223,10 +223,10 @@ def _assign_guides_legacy(deduped_df, min_umi_threshold=5,
     if multiplet_strategy == 'all':
         # Keep all assignments
         result = above_thresh.copy()
-        result['assignment_type'] = 'single'
+        result['combo_type'] = 'singlet'
         result.loc[
             result['bc_wells'].isin(guides_per_cell[guides_per_cell > 1].index),
-            'assignment_type'
+            'combo_type'
         ] = 'multiplet'
 
     elif multiplet_strategy == 'top':
@@ -236,7 +236,7 @@ def _assign_guides_legacy(deduped_df, min_umi_threshold=5,
         for bc, group in above_thresh.groupby('bc_wells'):
             if len(group) == 1:
                 row = group.iloc[0].copy()
-                row['assignment_type'] = 'single'
+                row['combo_type'] = 'singlet'
                 result_parts.append(row)
             else:
                 group_sorted = group.sort_values('umi_count', ascending=False)
@@ -245,11 +245,10 @@ def _assign_guides_legacy(deduped_df, min_umi_threshold=5,
                 dominance = top['umi_count'] / total_umi
 
                 if min_dominance_fraction > 0 and dominance < min_dominance_fraction:
-                    # Not dominant enough, skip
                     continue
 
                 row = top.copy()
-                row['assignment_type'] = 'top_of_multiplet'
+                row['combo_type'] = 'multiplet'
                 result_parts.append(row)
 
         result = pd.DataFrame(result_parts)
@@ -258,12 +257,20 @@ def _assign_guides_legacy(deduped_df, min_umi_threshold=5,
         # Discard all multi-guide cells
         single_cells = guides_per_cell[guides_per_cell == 1].index
         result = above_thresh[above_thresh['bc_wells'].isin(single_cells)].copy()
-        result['assignment_type'] = 'single'
+        result['combo_type'] = 'singlet'
         print(f"    Discarded {multiplets:,} multi-guide cells")
 
     else:
         raise ValueError(f"Unknown multiplet_strategy: {multiplet_strategy}")
 
+    if len(result) > 0:
+        result['n_guides'] = result['bc_wells'].map(guides_per_cell)
+
+        print("    Combo types (per cell):")
+        cell_level = result.drop_duplicates('bc_wells')
+        for status, count in cell_level['combo_type'].value_counts().items():
+            print(f"      {status:>15}: {count:,}")
+            
     print(f"    Final assignments:      {len(result):,}")
     return result
 
@@ -470,7 +477,7 @@ def assign_dual_guide_pairs(deduped_df, ref_df, min_umi_threshold=5, ibar_col='i
 
 
 def compute_qc_stats(lib_stats_all, deduped_df, assignment_df, guide_matrix,
-                     cell_barcodes, guide_names, dual_guide_mode=False):
+                     cell_barcodes, guide_names, dual_guide_counting_mode=False):
     """Compute QC statistics.
 
     Args:
@@ -502,7 +509,7 @@ def compute_qc_stats(lib_stats_all, deduped_df, assignment_df, guide_matrix,
     stats['cells_with_assignment'] = assignment_df['bc_wells'].nunique()
     stats['assignments_total'] = len(assignment_df)
 
-    if dual_guide_mode:
+    if dual_guide_counting_mode:
         # --- Cell-level counts (each cell counted once) ---
         cell_level = assignment_df.drop_duplicates('bc_wells')
         n_singlet = int((cell_level['combo_type'] == 'singlet').sum())
@@ -537,9 +544,9 @@ def compute_qc_stats(lib_stats_all, deduped_df, assignment_df, guide_matrix,
             count = int((assignment_df['target_combo'] == tc).sum())
             stats[f'target_combo_{tc}_assignments'] = count
     else:
-        for atype in assignment_df['assignment_type'].unique():
-            count = int((assignment_df['assignment_type'] == atype).sum())
-            stats[f'assignment_type_{atype}'] = count
+        for atype in assignment_df['combo_type'].unique():
+            count = int((assignment_df['combo_type'] == atype).sum())
+            stats[f'combo_type_{atype}'] = count
 
         guides_per_cell = assignment_df.groupby('bc_wells')['grna_name'].nunique()
         stats['mean_guides_per_cell'] = float(guides_per_cell.mean())
@@ -602,8 +609,11 @@ def _determine_group_cols(match_path, dedup_ibar):
     if dedup_ibar:
         if 'ibar_seq_corrected' in header_cols:
             return ['bc_wells', 'grna_name', 'target_gene', 'ibar_seq_corrected', 'ibar_seq_unresolved']
-        else:
+        elif 'ibar_seq' in header_cols:
             return ['bc_wells', 'grna_name', 'target_gene', 'ibar_seq']
+        else:
+            print("  WARNING: dedup_ibar is True, but no iBAR columns found. Disabling dedup_ibar.")
+            return ['bc_wells', 'grna_name', 'target_gene']
     else:
         return ['bc_wells', 'grna_name', 'target_gene']
 
@@ -633,8 +643,15 @@ def main():
     dedup_ibar = ga.get('umi_dedup_ibar', True)
     max_umi_edits = ga.get('max_umi_edits', 1)
 
+    # Auto-override: disable iBAR dedup when ibar_length == 0
+    ibar_length = cfg.get('grna_structure', {}).get('ibar_length', 7)
+    if ibar_length == 0 and dedup_ibar:
+        print("  NOTE: ibar_length=0 in config → overriding umi_dedup_ibar to False")
+        dedup_ibar = False
+
     print(f"\n{'='*60}")
     print(f"  Step 4: Cell-Level gRNA Assignment")
+    print(f"  iBAR length:            {ibar_length}")
     print(f"  UMI dedup iBAR grouping: {dedup_ibar}")
     print(f"  UMI max edits: {max_umi_edits}")
     print(f"  Parallel CPUs: {args.ncpus}")
@@ -710,15 +727,15 @@ def main():
     print(f"    Unique guides:        {deduped_df['grna_name'].nunique():>12,}")
 
     ga = cfg['guide_assignment']
-    dual_guide_mode = ga.get('dual_guide_mode', False)
+    dual_guide_counting_mode = ga.get('dual_guide_counting_mode', False)
     
     # Join design annotations onto deduped data
     if ref_df is not None:
-        if dual_guide_mode:
+        if dual_guide_counting_mode:
             # Dual-guide mode: merge on BOTH grna_name and ibar_seq
             ibar_cols = [c for c in group_cols if 'ibar' in c and c != 'ibar_seq_unresolved']
             if not ibar_cols:
-                raise ValueError("dual_guide_mode requires umi_dedup_ibar to be true")
+                raise ValueError("dual_guide_counting_mode requires umi_dedup_ibar to be true")
             ibar_col = ibar_cols[0]
             
             join_cols = [c for c in available_cols if c not in ['grna_name', 'ibar_seq']]
@@ -737,7 +754,7 @@ def main():
             print(f"\n  Joined design annotations: {join_cols}")
 
     # Cell-level assignment
-    if dual_guide_mode:
+    if dual_guide_counting_mode:
         ibar_col = [c for c in group_cols if 'ibar' in c and c != 'ibar_seq_unresolved'][0]
         assignment_df = assign_dual_guide_pairs(
             deduped_df,
@@ -746,7 +763,7 @@ def main():
             ibar_col=ibar_col
         )
     else:
-        assignment_df = _assign_guides_legacy(
+        assignment_df = assign_single_guides(
             deduped_df,
             min_umi_threshold=ga['min_umi_threshold'],
             multiplet_strategy=ga['multiplet_strategy'],
@@ -760,7 +777,7 @@ def main():
     qc_stats = compute_qc_stats(
         lib_stats_all, deduped_df, assignment_df,
         guide_matrix, cell_barcodes, guide_names,
-        dual_guide_mode=dual_guide_mode
+        dual_guide_counting_mode=dual_guide_counting_mode
     )
 
     # --- Save outputs ---
@@ -817,7 +834,7 @@ def main():
     print(f"    Unique cells with reads:{qc_stats['total_unique_cells_with_reads']:>12,}")
     print(f"    Cells with assignment:  {qc_stats['cells_with_assignment']:>12,}")
     
-    if dual_guide_mode:
+    if dual_guide_counting_mode:
         print(f"    Mean pairs/cell:        {qc_stats.get('mean_pairs_per_cell', 0):>12.2f}")
     else:
         print(f"    Mean guides/cell:       {qc_stats.get('mean_guides_per_cell', 0):>12.2f}")
@@ -825,7 +842,7 @@ def main():
     print(f"    Median UMI/cell-guide:  {qc_stats['median_umi_per_cell_guide']:>12.1f}")
 
     # Pair-level analysis (if dual guide mode)
-    if dual_guide_mode and len(assignment_df) > 0:
+    if dual_guide_counting_mode and len(assignment_df) > 0:
         print(f"\n  Pair-Level Analysis:")
         # assignment_df has one row per pair combination above threshold
         both_pos = (assignment_df['detection_status'] == 'complete').sum()

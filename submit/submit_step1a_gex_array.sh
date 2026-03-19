@@ -26,11 +26,15 @@ else
     CONFIG="$(dirname "${SUBMIT_DIR}")/config.yaml"
 fi
 
-# Initialize conda (must happen before any python3 calls)
-eval "$($HOME/my-conda/condabin/conda shell.bash hook)"
-conda activate splitpipe
+# --- Initialize conda (parsed from config via grep — no python3 needed yet) ---
+_CONDA_PREFIX=$(grep '^ *conda_prefix:' "${CONFIG}" | head -1 | sed 's/.*: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/')
+_CONDA_ENV=$(grep '^ *conda_env:' "${CONFIG}" | head -1 | sed 's/.*: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/')
+CONDA_PREFIX="${_CONDA_PREFIX:-$HOME/my-conda}"
+CONDA_ENV="${_CONDA_ENV:-splitpipe}"
+eval "$(${CONDA_PREFIX}/condabin/conda shell.bash hook)"
+conda activate "${CONDA_ENV}"
 
-LOG_DIR=$(python3 -c "import yaml; print(yaml.safe_load(open('${CONFIG}'))['paths'].get('log_dir', '$(dirname "${CONFIG}")/logs'))")
+LOG_DIR=$(python3 -c "import yaml; print(yaml.safe_load(open('${CONFIG}'))['paths'].get('log_dir', '$(dirname \"${CONFIG}\")/logs'))")
 mkdir -p "${LOG_DIR}"
 
 # --- Map array task ID to sublibrary ---
@@ -92,27 +96,28 @@ echo "  Cores:      ${NSLOTS:-16}"
 echo "=========================================="
 
 # Find FASTQ files
-FQ1=$(find "${FASTQ_DIR}" -name "*${GEX_PREFIX}*_R1_*fastq.gz" | head -1)
-FQ2=$(find "${FASTQ_DIR}" -name "*${GEX_PREFIX}*_R2_*fastq.gz" | head -1)
+FQ1_LIST=$(find "${FASTQ_DIR}" -name "*${GEX_PREFIX}*_R1_*fastq.gz" | sort | tr '\n' ' ')
+FQ2_LIST=$(find "${FASTQ_DIR}" -name "*${GEX_PREFIX}*_R2_*fastq.gz" | sort | tr '\n' ' ')
 
-if [[ -z "$FQ1" || -z "$FQ2" ]]; then
-    echo "ERROR: Could not find FASTQ files for GEX prefix '${GEX_PREFIX}'"
+if [[ -z "${FQ1_LIST// /}" || -z "${FQ2_LIST// /}" ]]; then
+    echo "ERROR: Could not find FASTQ files for GEX prefix '${GEX_PREFIX}' in ${FASTQ_DIR}"
     exit 1
 fi
 
-echo "R1: ${FQ1}"
-echo "R2: ${FQ2}"
+echo "R1 files: ${FQ1_LIST}"
+echo "R2 files: ${FQ2_LIST}"
 echo "Output: ${OUT_SUBLIB}"
 echo ""
 
 # Run split-pipe
+# Note: FQ1_LIST and FQ2_LIST are unquoted so bash splits them into multiple arguments
 "${SPLITPIPE}" \
     --mode all \
     --kit "${KIT}" \
     --chemistry "${CHEMISTRY}" \
     --genome_dir "${GENOME_DIR}" \
-    --fq1 "${FQ1}" \
-    --fq2 "${FQ2}" \
+    --fq1 ${FQ1_LIST} \
+    --fq2 ${FQ2_LIST} \
     --output_dir "${OUT_SUBLIB}" \
     --sample "${SAMPLE_NAME}" "${SAMPLE_WELLS}" \
     --nthreads "${NSLOTS:-16}" \

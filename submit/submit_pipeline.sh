@@ -20,8 +20,7 @@ set -euo pipefail
 
 # --- Defaults (derived from script location) ---
 SUBMIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(dirname "${SUBMIT_DIR}")"
-CONFIG="${PROJECT_DIR}/config.yaml"
+CONFIG="$(dirname "${SUBMIT_DIR}")/config.yaml"
 STEPS="all"
 DRY_RUN=false
 
@@ -47,6 +46,9 @@ if ! command -v python3 &> /dev/null; then
     echo "ERROR: python3 not found. Source your conda environment first."
     exit 1
 fi
+
+# --- Resolve project dir from config (grep — no pyyaml needed) ---
+PROJECT_DIR=$(grep '^ *project_dir:' "${CONFIG}" | head -1 | sed 's/.*: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/')
 
 N_LIBS=$(python3 -c "
 import yaml
@@ -74,8 +76,9 @@ mkdir -p "${LOG_DIR}"
 echo "=========================================="
 echo "  ccPerturbSeq Pipeline Submission"
 echo "=========================================="
-echo "  Config:     ${CONFIG}"
-echo "  Libraries:  ${N_LIBS}"
+echo "  Config:      ${CONFIG}"
+echo "  Project dir: ${PROJECT_DIR}"
+echo "  Libraries:   ${N_LIBS}"
 echo "${LIB_NAMES}"
 echo "  Log dir:    ${LOG_DIR}"
 echo "  Steps:      ${STEPS}"
@@ -104,19 +107,19 @@ should_run() {
 # Step 1a: GEX split-pipe (array job)
 if should_run 1; then
     echo "--- Step 1a: GEX split-pipe (array ×${N_LIBS}) ---"
-    submit "qsub -v CSM_CONFIG=${CONFIG} -t 1-${N_LIBS} -o ${LOG_DIR}/step1a_gex.\\\$JOB_ID.\\\$TASK_ID.log ${SUBMIT_DIR}/submit_step1a_gex_array.sh"
+    submit "qsub -v CSM_CONFIG=${CONFIG},CSM_PROJECT_DIR=${PROJECT_DIR} -t 1-${N_LIBS} -o ${LOG_DIR}/step1a_gex.\\\$JOB_ID.\\\$TASK_ID.log ${SUBMIT_DIR}/submit_step1a_gex_array.sh"
     echo ""
 
     # Step 1b: Combine (after 1a)
     echo "--- Step 1b: Combine GEX sublibraries ---"
-    submit "qsub -v CSM_CONFIG=${CONFIG} -hold_jid csm_step1a_gex -o ${LOG_DIR}/step1b_combine.\\\$JOB_ID.log ${SUBMIT_DIR}/submit_step1b_gex_combine.sh"
+    submit "qsub -v CSM_CONFIG=${CONFIG},CSM_PROJECT_DIR=${PROJECT_DIR} -hold_jid csm_step1a_gex -o ${LOG_DIR}/step1b_combine.\\\$JOB_ID.log ${SUBMIT_DIR}/submit_step1b_gex_combine.sh"
     echo ""
 fi
 
 # Step 2: Barcode extraction (array job)
 if should_run 2; then
     echo "--- Step 2: Extract gRNA barcodes (array ×${N_LIBS}) ---"
-    submit "qsub -v CSM_CONFIG=${CONFIG} -t 1-${N_LIBS} -o ${LOG_DIR}/step2_bc.\\\$JOB_ID.\\\$TASK_ID.log ${SUBMIT_DIR}/submit_step2_barcodes.sh"
+    submit "qsub -v CSM_CONFIG=${CONFIG},CSM_PROJECT_DIR=${PROJECT_DIR} -t 1-${N_LIBS} -o ${LOG_DIR}/step2_bc.\\\$JOB_ID.\\\$TASK_ID.log ${SUBMIT_DIR}/submit_step2_barcodes.sh"
     echo ""
 fi
 
@@ -124,9 +127,9 @@ fi
 if should_run 3; then
     echo "--- Step 3: Match gRNA + iBAR (array ×${N_LIBS}) ---"
     if should_run 2; then
-        submit "qsub -v CSM_CONFIG=${CONFIG} -hold_jid csm_step2_bc -t 1-${N_LIBS} -o ${LOG_DIR}/step3_match.\\\$JOB_ID.\\\$TASK_ID.log ${SUBMIT_DIR}/submit_step3_match.sh"
+        submit "qsub -v CSM_CONFIG=${CONFIG},CSM_PROJECT_DIR=${PROJECT_DIR} -hold_jid csm_step2_bc -t 1-${N_LIBS} -o ${LOG_DIR}/step3_match.\\\$JOB_ID.\\\$TASK_ID.log ${SUBMIT_DIR}/submit_step3_match.sh"
     else
-        submit "qsub -v CSM_CONFIG=${CONFIG} -t 1-${N_LIBS} -o ${LOG_DIR}/step3_match.\\\$JOB_ID.\\\$TASK_ID.log ${SUBMIT_DIR}/submit_step3_match.sh"
+        submit "qsub -v CSM_CONFIG=${CONFIG},CSM_PROJECT_DIR=${PROJECT_DIR} -t 1-${N_LIBS} -o ${LOG_DIR}/step3_match.\\\$JOB_ID.\\\$TASK_ID.log ${SUBMIT_DIR}/submit_step3_match.sh"
     fi
     echo ""
 fi
@@ -135,9 +138,9 @@ fi
 if should_run 4; then
     echo "--- Step 4: Assign gRNAs to cells ---"
     if should_run 3; then
-        submit "qsub -v CSM_CONFIG=${CONFIG} -hold_jid csm_step3_match -o ${LOG_DIR}/step4_assign.\\\$JOB_ID.log ${SUBMIT_DIR}/submit_step4_assign.sh"
+        submit "qsub -v CSM_CONFIG=${CONFIG},CSM_PROJECT_DIR=${PROJECT_DIR} -hold_jid csm_step3_match -o ${LOG_DIR}/step4_assign.\\\$JOB_ID.log ${SUBMIT_DIR}/submit_step4_assign.sh"
     else
-        submit "qsub -v CSM_CONFIG=${CONFIG} -o ${LOG_DIR}/step4_assign.\\\$JOB_ID.log ${SUBMIT_DIR}/submit_step4_assign.sh"
+        submit "qsub -v CSM_CONFIG=${CONFIG},CSM_PROJECT_DIR=${PROJECT_DIR} -o ${LOG_DIR}/step4_assign.\\\$JOB_ID.log ${SUBMIT_DIR}/submit_step4_assign.sh"
     fi
     echo ""
 fi
@@ -155,9 +158,9 @@ if should_run 5; then
         fi
     fi
     if [[ -n "$local_holds" ]]; then
-        submit "qsub -v CSM_CONFIG=${CONFIG} -hold_jid ${local_holds} -o ${LOG_DIR}/step5_anndata.\\\$JOB_ID.log ${SUBMIT_DIR}/submit_step5_anndata.sh"
+        submit "qsub -v CSM_CONFIG=${CONFIG},CSM_PROJECT_DIR=${PROJECT_DIR} -hold_jid ${local_holds} -o ${LOG_DIR}/step5_anndata.\\\$JOB_ID.log ${SUBMIT_DIR}/submit_step5_anndata.sh"
     else
-        submit "qsub -v CSM_CONFIG=${CONFIG} -o ${LOG_DIR}/step5_anndata.\\\$JOB_ID.log ${SUBMIT_DIR}/submit_step5_anndata.sh"
+        submit "qsub -v CSM_CONFIG=${CONFIG},CSM_PROJECT_DIR=${PROJECT_DIR} -o ${LOG_DIR}/step5_anndata.\\\$JOB_ID.log ${SUBMIT_DIR}/submit_step5_anndata.sh"
     fi
     echo ""
 fi

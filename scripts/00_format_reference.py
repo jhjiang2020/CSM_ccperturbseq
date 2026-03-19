@@ -2,24 +2,28 @@
 """
 Step 0: Format gRNA/iBAR reference from library design file.
 
-Converts the dual-guide library design file into the reference lookup table
-used by the downstream pipeline. Each design row contains a dual-guide
-construct (spacer_1 + iBAR_1 paired with stem_1/tracr_1, spacer_2 + iBAR_2
-paired with stem_2/tracr_2). This script produces two reference entries
-per design row — one per guide position.
+Converts the library design file into the reference lookup table used by the
+downstream pipeline. Supports both dual-guide mode (two entries per design row)
+and single-guide mode (one entry per design row).
+
+Mode is auto-resolved from config (single_guide_mode: true → single, else dual)
+but can be overridden with --mode.
 
 Key behaviors:
   - iBAR sequences in the design are on the oligo (sense) strand. In the
     gRNA read, iBARs appear as the reverse complement. By default this
     script reverse-complements iBARs; disable with --no-rev-comp.
+  - When ibar_length is 0 (no iBAR), all iBAR-related checks are skipped.
+    If duplicate grna_seq entries are detected, they are collapsed to the
+    first grna_name and the user is notified.
   - Guide ID format: <spacer_X_target>_<target_posX>_<spacer_version_posX>
   - Pair-level annotation: from iBAR (and spacer+iBAR combination) we can
     infer <target>_<target_version> for the combination of target_1 + target_2.
 
 Usage:
   python scripts/00_format_reference.py --config config.yaml
+  python scripts/00_format_reference.py --config config.yaml --mode single
   python scripts/00_format_reference.py --design design.csv --output ref.csv
-  python scripts/00_format_reference.py --design design.csv --no-rev-comp
 """
 
 import argparse
@@ -49,7 +53,7 @@ def reverse_complement(seq):
 # Core formatting
 # ---------------------------------------------------------------------------
 
-def format_reference(design_df, rev_comp_ibar=True):
+def format_reference(design_df, rev_comp_ibar=True, ibar_length=None):
     """Convert a library design DataFrame to gRNA/iBAR reference table.
 
     For each design row, creates TWO entries:
@@ -65,7 +69,7 @@ def format_reference(design_df, rev_comp_ibar=True):
         DataFrame with reference columns
     """
     REQUIRED_COLS = [
-        'spacer_1', 'spacer_2', 'iBAR_1', 'iBAR_2',
+        'spacer_1', 'spacer_2',
         'target_pos1', 'spacer_version_pos1',
         'target_pos2', 'spacer_version_pos2',
         'target', 'target_version',
@@ -78,6 +82,11 @@ def format_reference(design_df, rev_comp_ibar=True):
             f"Required: {REQUIRED_COLS}\n"
             f"Found: {list(design_df.columns)}"
         )
+        
+    has_ibar = 'iBAR_1' in design_df.columns and 'iBAR_2' in design_df.columns
+    if not has_ibar:
+        print("  WARNING: iBAR_1 or iBAR_2 not found in dual-guide design. Proceeding with empty iBAR sequences.")
+        print("  → Make sure to set `ibar_length: 0` in your config.yaml.")
 
     records = []
 
@@ -95,8 +104,8 @@ def format_reference(design_df, rev_comp_ibar=True):
         dialout = row.get('dialout', '')
 
         # --- Position 1: spacer_1 + iBAR_1 + stem_1/tracr_1 ---
-        ibar_1_raw = str(row['iBAR_1']).strip()
-        ibar_1 = reverse_complement(ibar_1_raw) if rev_comp_ibar else ibar_1_raw
+        ibar_1_raw = str(row.get('iBAR_1', '')).strip() if pd.notna(row.get('iBAR_1', '')) else ''
+        ibar_1 = reverse_complement(ibar_1_raw) if rev_comp_ibar and ibar_1_raw else ibar_1_raw
 
         grna_name_1 = f"{row['spacer_1_target']}_{row['target_pos1']}_{row['spacer_version_pos1']}"
         records.append({
@@ -119,8 +128,8 @@ def format_reference(design_df, rev_comp_ibar=True):
         })
 
         # --- Position 2: spacer_2 + iBAR_2 + stem_2/tracr_2 ---
-        ibar_2_raw = str(row['iBAR_2']).strip()
-        ibar_2 = reverse_complement(ibar_2_raw) if rev_comp_ibar else ibar_2_raw
+        ibar_2_raw = str(row.get('iBAR_2', '')).strip() if pd.notna(row.get('iBAR_2', '')) else ''
+        ibar_2 = reverse_complement(ibar_2_raw) if rev_comp_ibar and ibar_2_raw else ibar_2_raw
 
         grna_name_2 = f"{row['spacer_2_target']}_{row['target_pos2']}_{row['spacer_version_pos2']}"
         records.append({
@@ -144,30 +153,147 @@ def format_reference(design_df, rev_comp_ibar=True):
 
     ref_df = pd.DataFrame(records)
 
-    # --- Build iBAR → pair_id lookup ---
-    # From iBAR alone we should be able to infer the pair (target_target_version)
-    ibar_to_pair = ref_df.groupby('ibar_seq')['pair_id'].apply(
-        lambda x: x.unique()
-    )
-    ambiguous_ibars = ibar_to_pair[ibar_to_pair.apply(len) > 1]
-    if len(ambiguous_ibars) > 0:
-        print(f"  WARNING: {len(ambiguous_ibars)} iBAR sequences map to "
-              f"multiple pair_ids (iBAR alone is not sufficient for pair inference):")
-        for ibar, pairs in ambiguous_ibars.head(5).items():
-            print(f"    {ibar} → {list(pairs)}")
-    else:
-        print(f"  ✓ All iBAR sequences uniquely identify a pair_id")
+    # --- Validate and fix pair_id uniqueness ---
+    # Each pair_id must correspond to exactly one pos1 row and one pos2 row.
+    # If the design file gives two different clones the same target + target_version,
+    # they will collide on pair_id and cause downstream errors in Step 4.
+    # Fix: append a unique suffix (_d1, _d2, ...) to each duplicate pair_id.
+    design_rows_per_pair = ref_df.groupby('pair_id')['design_row_index'].nunique()
+    dup_pair_ids = design_rows_per_pair[design_rows_per_pair > 1].index.tolist()
 
-    # --- Build (spacer, iBAR) → pair_id lookup ---
-    combo_to_pair = ref_df.groupby(['grna_seq', 'ibar_seq'])['pair_id'].apply(
-        lambda x: x.unique()
-    )
-    ambiguous_combos = combo_to_pair[combo_to_pair.apply(len) > 1]
-    if len(ambiguous_combos) > 0:
-        print(f"  WARNING: {len(ambiguous_combos)} (spacer, iBAR) combos map "
-              f"to multiple pair_ids")
+    if dup_pair_ids:
+        n_fixed = 0
+        print(f"\n  ⚠ DUPLICATE pair_id: {len(dup_pair_ids)} pair_id(s) are shared by "
+              f"multiple design rows. Appending unique suffixes:")
+        print(f"    {'original pair_id':<30s}  {'target':<20s}  {'target_version':<16s}  → new pair_id")
+        print(f"    {'─'*30}  {'─'*20}  {'─'*16}  {'─'*30}")
+        for pid in sorted(dup_pair_ids):
+            mask = ref_df['pair_id'] == pid
+            # Get unique design rows for this pair_id, ordered by design_row_index
+            design_rows = sorted(ref_df.loc[mask, 'design_row_index'].unique())
+            for i, dri in enumerate(design_rows, start=1):
+                new_pid = f"{pid}_d{i}"
+                row_mask = mask & (ref_df['design_row_index'] == dri)
+                ref_df.loc[row_mask, 'pair_id'] = new_pid
+                # Get the target/target_version for display
+                sample_row = ref_df.loc[row_mask].iloc[0]
+                print(f"    {pid:<30s}  {sample_row['target_combo']:<20s}  "
+                      f"{str(sample_row['target_version']):<16s}  → {new_pid}")
+                n_fixed += 1
+        print(f"\n    Fixed {n_fixed} pair_ids across {len(dup_pair_ids)} duplicate group(s).")
+        print(f"    Note: target_combo is preserved; only pair_id was made unique.")
     else:
-        print(f"  ✓ All (spacer, iBAR) combos uniquely identify a pair_id")
+        print(f"  ✓ All pair_ids are unique (each maps to exactly one pos1 + one pos2 entry)")
+
+    # --- Build iBAR → pair_id lookup ---
+    if has_ibar:
+        # From iBAR alone we should be able to infer the pair (target_target_version)
+        ibar_to_pair = ref_df.groupby('ibar_seq')['pair_id'].apply(
+            lambda x: x.unique()
+        )
+        ambiguous_ibars = ibar_to_pair[ibar_to_pair.apply(len) > 1]
+        if len(ambiguous_ibars) > 0:
+            print(f"  WARNING: {len(ambiguous_ibars)} iBAR sequences map to "
+                  f"multiple pair_ids (iBAR alone is not sufficient for pair inference):")
+            for ibar, pairs in ambiguous_ibars.head(5).items():
+                print(f"    {ibar} → {list(pairs)}")
+        else:
+            print(f"  ✓ All iBAR sequences uniquely identify a pair_id")
+
+        # --- Build (spacer, iBAR) → pair_id lookup ---
+        combo_to_pair = ref_df.groupby(['grna_seq', 'ibar_seq'])['pair_id'].apply(
+            lambda x: x.unique()
+        )
+        ambiguous_combos = combo_to_pair[combo_to_pair.apply(len) > 1]
+        if len(ambiguous_combos) > 0:
+            print(f"  WARNING: {len(ambiguous_combos)} (spacer, iBAR) combos map "
+                  f"to multiple pair_ids")
+        else:
+            print(f"  ✓ All (spacer, iBAR) combos uniquely identify a pair_id")
+    else:
+        print("  ✓ Skipping iBAR overlap checks (no iBARs provided)")
+
+    return ref_df
+
+
+def format_reference_single(design_df, rev_comp_ibar=True, ibar_length=None):
+    """Convert a library design DataFrame to gRNA/iBAR reference table for single-guide mode.
+
+    For each design row, creates ONE entry:
+      - spacer + iBAR (position 1, variant A / stem_1 + tracr_1)
+
+    When ibar_length==0 and duplicate grna_seq are found, they are collapsed
+    to the first grna_name and the user is notified.
+
+    Args:
+        design_df: DataFrame with design columns
+        rev_comp_ibar: If True, reverse-complement iBAR from design file
+        ibar_length: Expected iBAR length from config (0 = no iBAR)
+
+    Returns:
+        DataFrame with reference columns
+    """
+    REQUIRED_COLS = ['sgRNA_ID', 'spacer', 'target']
+    missing = [c for c in REQUIRED_COLS if c not in design_df.columns]
+    if missing:
+        raise ValueError(
+            f"Design file missing required columns: {missing}\n"
+            f"Required: {REQUIRED_COLS}\n"
+            f"Found: {list(design_df.columns)}"
+        )
+
+    has_ibar = 'iBAR' in design_df.columns
+    if not has_ibar:
+        print("  WARNING: iBAR not found in single-guide design. Proceeding with empty iBAR sequences.")
+        print("  → Make sure to set `ibar_length: 0` in your config.yaml.")
+
+    records = []
+    for idx, row in design_df.iterrows():
+        grna_name = str(row['sgRNA_ID']).strip()
+        target = str(row['target']).strip()
+        
+        ibar_raw = str(row.get('iBAR', '')).strip() if pd.notna(row.get('iBAR', '')) else ''
+        ibar = reverse_complement(ibar_raw) if rev_comp_ibar and ibar_raw else ibar_raw
+
+        records.append({
+            'grna_name': grna_name,
+            'grna_seq': str(row['spacer']).strip(),
+            'ibar_seq': ibar,
+            'ibar_design_seq': ibar_raw,
+            'target_gene': target,
+            'position': 1,
+            'stem_variant': 'A',
+            'pair_id': '',
+            'target_combo': target,
+            'target_version': row.get('target_version', ''),
+            'gi_pair': '',
+            'gi_version': '',
+            'gi_version_index': '',
+            'trna_version': '',
+            'dialout': '',
+            'design_row_index': idx,
+        })
+        
+    ref_df = pd.DataFrame(records)
+
+    # --- No-iBAR dedup: collapse duplicate grna_seq ---
+    if ibar_length is not None and ibar_length == 0:
+        dup_mask = ref_df.duplicated(subset=['grna_seq'], keep=False)
+        dup_seqs = ref_df[dup_mask]
+        if len(dup_seqs) > 0:
+            collapsed_info = []
+            for seq, group in dup_seqs.groupby('grna_seq'):
+                kept = group.iloc[0]['grna_name']
+                dropped = group.iloc[1:]['grna_name'].tolist()
+                collapsed_info.append((seq[:20], kept, dropped))
+            print(f"\n  ⚠ {len(collapsed_info)} duplicated grna_seq detected (no iBAR to distinguish).")
+            print(f"    Collapsing to first grna_name:")
+            for seq_trunc, kept, dropped in collapsed_info[:10]:
+                print(f"      {seq_trunc}... → keep '{kept}', drop {dropped}")
+            if len(collapsed_info) > 10:
+                print(f"      ... and {len(collapsed_info) - 10} more")
+            ref_df = ref_df.drop_duplicates(subset=['grna_seq'], keep='first')
+            print(f"    Reference reduced from {len(dup_seqs) + len(ref_df) - len(ref_df)} to {len(ref_df)} entries.")
 
     return ref_df
 
@@ -204,7 +330,7 @@ def _levenshtein(s1, s2, max_dist=None):
 # Reference overlap / ambiguity check
 # ---------------------------------------------------------------------------
 
-def check_reference_overlap(ref_df, max_lev_dist_grna, max_lev_dist_ibar):
+def check_reference_overlap(ref_df, max_lev_dist_grna, max_lev_dist_ibar, ibar_length=None):
     """Check for potentially ambiguous gRNA and iBAR sequences at the given
     Levenshtein distance thresholds.
 
@@ -224,11 +350,13 @@ def check_reference_overlap(ref_df, max_lev_dist_grna, max_lev_dist_ibar):
         ref_df: Reference DataFrame from format_reference().
         max_lev_dist_grna: Max Levenshtein distance for gRNA matching.
         max_lev_dist_ibar: Max Levenshtein distance for iBAR matching.
+        ibar_length: Expected iBAR length from config (0 = no iBAR, skip iBAR checks).
 
     Returns:
         True if there are CRITICAL overlaps, False otherwise.
     """
     has_critical = False
+    has_ibar = ibar_length is None or ibar_length > 0
 
     # ------------------------------------------------------------------
     # 0. Shared gRNA sequences across positions
@@ -259,21 +387,26 @@ def check_reference_overlap(ref_df, max_lev_dist_grna, max_lev_dist_ibar):
         if n_shared > 5:
             print(f"      ... and {n_shared - 5} more")
 
-        # Check iBAR uniqueness across positions for shared gRNAs
-        ibar_overlap_count = 0
-        for seq in shared.index:
-            entries = ref_df[ref_df['grna_seq'] == seq]
-            pos1_ibars = set(entries[entries['position'] == 1]['ibar_seq'])
-            pos2_ibars = set(entries[entries['position'] == 2]['ibar_seq'])
-            ibar_overlap_count += len(pos1_ibars & pos2_ibars)
+        if has_ibar:
+            # Check iBAR uniqueness across positions for shared gRNAs
+            ibar_overlap_count = 0
+            for seq in shared.index:
+                entries = ref_df[ref_df['grna_seq'] == seq]
+                pos1_ibars = set(entries[entries['position'] == 1]['ibar_seq'])
+                pos2_ibars = set(entries[entries['position'] == 2]['ibar_seq'])
+                ibar_overlap_count += len(pos1_ibars & pos2_ibars)
 
-        if ibar_overlap_count == 0:
-            print(f"\n    ✓ iBARs do NOT overlap across positions for shared gRNAs")
-            print(f"      → Step 3 can disambiguate via iBAR + stem variant")
+            if ibar_overlap_count == 0:
+                print(f"\n    ✓ iBARs do NOT overlap across positions for shared gRNAs")
+                print(f"      → Step 3 can disambiguate via iBAR + stem variant")
+            else:
+                has_critical = True
+                print(f"\n    ⚠ CRITICAL: {ibar_overlap_count} iBAR(s) overlap across positions!")
+                print(f"      → These reads cannot be disambiguated even with iBAR + variant")
         else:
             has_critical = True
-            print(f"\n    ⚠ CRITICAL: {ibar_overlap_count} iBAR(s) overlap across positions!")
-            print(f"      → These reads cannot be disambiguated even with iBAR + variant")
+            print(f"\n    ⚠ CRITICAL: No iBAR to disambiguate shared gRNA sequences!")
+            print(f"      → These reads cannot be assigned to a unique guide.")
     else:
         print(f"    ✓ No gRNA sequences shared across positions")
 
@@ -337,96 +470,99 @@ def check_reference_overlap(ref_df, max_lev_dist_grna, max_lev_dist_ibar):
     # ------------------------------------------------------------------
     # 2. iBAR overlap
     # ------------------------------------------------------------------
-    ibar_scan_dist = 2 * max_lev_dist_ibar
-
-    # --- 2a. Global iBAR distances (across all constructs) ---
-    print(f"\n  Checking iBAR uniqueness globally (all constructs)...")
-
-    unique_ibars = ref_df.drop_duplicates('ibar_seq')[['ibar_seq', 'pair_id']].values.tolist()
-    n_ibars = len(unique_ibars)
-
-    global_ibar_dists = []
-    global_ibar_critical = []
-    global_ibar_warning = []
-
-    for i in range(n_ibars):
-        for j in range(i + 1, n_ibars):
-            seq_a, pair_a = unique_ibars[i]
-            seq_b, pair_b = unique_ibars[j]
-            d = _levenshtein(seq_a, seq_b, max_dist=ibar_scan_dist)
-            global_ibar_dists.append(d)
-            if d <= max_lev_dist_ibar:
-                global_ibar_critical.append((pair_a, pair_b, d, seq_a, seq_b))
-            elif d <= ibar_scan_dist:
-                global_ibar_warning.append((pair_a, pair_b, d, seq_a, seq_b))
-
-    if global_ibar_dists:
-        min_d = min(global_ibar_dists)
-        print(f"\n    Global iBAR pairwise distance stats ({n_ibars} unique iBARs):")
-        print(f"      Minimum:  {min_d}")
-        print(f"      Median:   {sorted(global_ibar_dists)[len(global_ibar_dists)//2]}")
-        if global_ibar_critical:
-            print(f"      {len(global_ibar_critical)} pair(s) within dist≤{max_lev_dist_ibar} globally")
-            for pa, pb, d, sa, sb in global_ibar_critical[:5]:
-                print(f"        dist={d}: {pa} ({sa}) ↔ {pb} ({sb})")
-            if len(global_ibar_critical) > 5:
-                print(f"        ... and {len(global_ibar_critical) - 5} more")
-        if global_ibar_warning:
-            print(f"      {len(global_ibar_warning)} pair(s) within dist≤{ibar_scan_dist} globally")
+    if not has_ibar:
+        print("\n  Skipping iBAR overlap checks (ibar_length=0)")
     else:
-        print(f"    Only {n_ibars} unique iBAR(s) — nothing to compare")
+        ibar_scan_dist = 2 * max_lev_dist_ibar
 
-    # --- 2b. Per-gRNA iBAR distances (what actually matters for matching) ---
-    print(f"\n  Checking iBAR uniqueness per gRNA (max_lev_dist_ibar={max_lev_dist_ibar})...")
-    print(f"    (This is the operationally relevant check — iBAR matching is gRNA-conditional)")
+        # --- 2a. Global iBAR distances (across all constructs) ---
+        print(f"\n  Checking iBAR uniqueness globally (all constructs)...")
 
-    # Group iBARs by gRNA
-    grna_ibars = defaultdict(list)
-    for _, row in ref_df.iterrows():
-        grna_ibars[row['grna_name']].append((row['ibar_seq'], row['pair_id']))
+        unique_ibars = ref_df.drop_duplicates('ibar_seq')[['ibar_seq', 'pair_id']].values.tolist()
+        n_ibars = len(unique_ibars)
 
-    ibar_critical = []
-    ibar_warning = []
-    all_ibar_min_dists = []
+        global_ibar_dists = []
+        global_ibar_critical = []
+        global_ibar_warning = []
 
-    for grna_name, ibars in grna_ibars.items():
-        if len(ibars) < 2:
-            continue
-        for (seq_a, pair_a), (seq_b, pair_b) in combinations(ibars, 2):
-            d = _levenshtein(seq_a, seq_b, max_dist=ibar_scan_dist)
-            all_ibar_min_dists.append(d)
-            if d <= max_lev_dist_ibar:
-                ibar_critical.append((grna_name, pair_a, pair_b, d, seq_a, seq_b))
-            elif d <= ibar_scan_dist:
-                ibar_warning.append((grna_name, pair_a, pair_b, d, seq_a, seq_b))
+        for i in range(n_ibars):
+            for j in range(i + 1, n_ibars):
+                seq_a, pair_a = unique_ibars[i]
+                seq_b, pair_b = unique_ibars[j]
+                d = _levenshtein(seq_a, seq_b, max_dist=ibar_scan_dist)
+                global_ibar_dists.append(d)
+                if d <= max_lev_dist_ibar:
+                    global_ibar_critical.append((pair_a, pair_b, d, seq_a, seq_b))
+                elif d <= ibar_scan_dist:
+                    global_ibar_warning.append((pair_a, pair_b, d, seq_a, seq_b))
 
-    if ibar_critical:
-        has_critical = True
-        print(f"\n    ⚠ CRITICAL: {len(ibar_critical)} iBAR pair(s) within max_lev_dist_ibar={max_lev_dist_ibar}")
-        print(f"      These reads will be DISCARDED as ambiguous after gRNA is matched.")
-        for grna, pa, pb, d, sa, sb in ibar_critical[:10]:
-            print(f"      dist={d}: [{grna}] {pa} ({sa}) ↔ {pb} ({sb})")
-        if len(ibar_critical) > 10:
-            print(f"      ... and {len(ibar_critical) - 10} more")
-    else:
-        print(f"    ✓ No iBAR pairs within max_lev_dist_ibar={max_lev_dist_ibar} (per gRNA)")
+        if global_ibar_dists:
+            min_d = min(global_ibar_dists)
+            print(f"\n    Global iBAR pairwise distance stats ({n_ibars} unique iBARs):")
+            print(f"      Minimum:  {min_d}")
+            print(f"      Median:   {sorted(global_ibar_dists)[len(global_ibar_dists)//2]}")
+            if global_ibar_critical:
+                print(f"      {len(global_ibar_critical)} pair(s) within dist≤{max_lev_dist_ibar} globally")
+                for pa, pb, d, sa, sb in global_ibar_critical[:5]:
+                    print(f"        dist={d}: {pa} ({sa}) ↔ {pb} ({sb})")
+                if len(global_ibar_critical) > 5:
+                    print(f"        ... and {len(global_ibar_critical) - 5} more")
+            if global_ibar_warning:
+                print(f"      {len(global_ibar_warning)} pair(s) within dist≤{ibar_scan_dist} globally")
+        else:
+            print(f"    Only {n_ibars} unique iBAR(s) — nothing to compare")
 
-    if ibar_warning:
-        print(f"\n    ⚡ WARNING: {len(ibar_warning)} iBAR pair(s) within 2×max_lev_dist_ibar={ibar_scan_dist}")
-        for grna, pa, pb, d, sa, sb in ibar_warning[:5]:
-            print(f"      dist={d}: [{grna}] {pa} ↔ {pb}")
-        if len(ibar_warning) > 5:
-            print(f"      ... and {len(ibar_warning) - 5} more")
+        # --- 2b. Per-gRNA iBAR distances (what actually matters for matching) ---
+        print(f"\n  Checking iBAR uniqueness per gRNA (max_lev_dist_ibar={max_lev_dist_ibar})...")
+        print(f"    (This is the operationally relevant check — iBAR matching is gRNA-conditional)")
 
-    if all_ibar_min_dists:
-        min_d = min(all_ibar_min_dists)
-        print(f"\n    Per-gRNA iBAR pairwise distance stats:")
-        print(f"      Minimum:  {min_d}")
-        print(f"      Median:   {sorted(all_ibar_min_dists)[len(all_ibar_min_dists)//2]}")
-        print(f"      Safe max_lev_dist_ibar: ≤ {(min_d - 1) // 2} "
-              f"(guarantees no overlap)")
-        if min_d <= max_lev_dist_ibar:
-            print(f"      → Current max_lev_dist_ibar={max_lev_dist_ibar} EXCEEDS safe limit!")
+        # Group iBARs by gRNA
+        grna_ibars = defaultdict(list)
+        for _, row in ref_df.iterrows():
+            grna_ibars[row['grna_name']].append((row['ibar_seq'], row['pair_id']))
+
+        ibar_critical = []
+        ibar_warning = []
+        all_ibar_min_dists = []
+
+        for grna_name, ibars in grna_ibars.items():
+            if len(ibars) < 2:
+                continue
+            for (seq_a, pair_a), (seq_b, pair_b) in combinations(ibars, 2):
+                d = _levenshtein(seq_a, seq_b, max_dist=ibar_scan_dist)
+                all_ibar_min_dists.append(d)
+                if d <= max_lev_dist_ibar:
+                    ibar_critical.append((grna_name, pair_a, pair_b, d, seq_a, seq_b))
+                elif d <= ibar_scan_dist:
+                    ibar_warning.append((grna_name, pair_a, pair_b, d, seq_a, seq_b))
+
+        if ibar_critical:
+            has_critical = True
+            print(f"\n    ⚠ CRITICAL: {len(ibar_critical)} iBAR pair(s) within max_lev_dist_ibar={max_lev_dist_ibar}")
+            print(f"      These reads will be DISCARDED as ambiguous after gRNA is matched.")
+            for grna, pa, pb, d, sa, sb in ibar_critical[:10]:
+                print(f"      dist={d}: [{grna}] {pa} ({sa}) ↔ {pb} ({sb})")
+            if len(ibar_critical) > 10:
+                print(f"      ... and {len(ibar_critical) - 10} more")
+        else:
+            print(f"    ✓ No iBAR pairs within max_lev_dist_ibar={max_lev_dist_ibar} (per gRNA)")
+
+        if ibar_warning:
+            print(f"\n    ⚡ WARNING: {len(ibar_warning)} iBAR pair(s) within 2×max_lev_dist_ibar={ibar_scan_dist}")
+            for grna, pa, pb, d, sa, sb in ibar_warning[:5]:
+                print(f"      dist={d}: [{grna}] {pa} ↔ {pb}")
+            if len(ibar_warning) > 5:
+                print(f"      ... and {len(ibar_warning) - 5} more")
+
+        if all_ibar_min_dists:
+            min_d = min(all_ibar_min_dists)
+            print(f"\n    Per-gRNA iBAR pairwise distance stats:")
+            print(f"      Minimum:  {min_d}")
+            print(f"      Median:   {sorted(all_ibar_min_dists)[len(all_ibar_min_dists)//2]}")
+            print(f"      Safe max_lev_dist_ibar: ≤ {(min_d - 1) // 2} "
+                  f"(guarantees no overlap)")
+            if min_d <= max_lev_dist_ibar:
+                print(f"      → Current max_lev_dist_ibar={max_lev_dist_ibar} EXCEEDS safe limit!")
 
     # ------------------------------------------------------------------
     # Summary
@@ -517,6 +653,8 @@ def main():
                         help="Override: path to output reference CSV")
     parser.add_argument("--no-rev-comp", action="store_true",
                         help="Do NOT reverse-complement iBAR sequences from design")
+    parser.add_argument("--mode", type=str, choices=["dual", "single"], default=None,
+                        help="Mode for reference formatting: dual or single. Auto-resolved from config single_guide_mode if not specified.")
     parser.add_argument("--sep", type=str, default=None,
                         help="Column separator for design file (auto-detected by default)")
     parser.add_argument("--check-only", type=str, default=None, metavar="REF_CSV",
@@ -566,15 +704,35 @@ def main():
         design_path = args.design
         output_path = args.output or design_path.replace('.csv', '_reference.csv')
         rev_comp = not args.no_rev_comp
+        cfg = None
     else:
         parser.error("Either --config or --design must be provided")
         return
 
+    # Resolve mode: CLI > config > default (dual)
+    if args.mode is not None:
+        mode = args.mode
+        mode_source = "CLI"
+    elif args.config:
+        single = cfg.get('grna_structure', {}).get('single_guide_mode', False)
+        mode = "single" if single else "dual"
+        mode_source = "config (single_guide_mode)"
+    else:
+        mode = "dual"
+        mode_source = "default"
+
+    # Resolve ibar_length from config (default 7)
+    ibar_length = 7
+    if args.config:
+        ibar_length = cfg.get('grna_structure', {}).get('ibar_length', 7)
+
     print(f"\n{'='*60}")
     print(f"  Step 0: Format gRNA/iBAR Reference")
     print(f"{'='*60}")
-    print(f"  Design file: {design_path}")
-    print(f"  Output:      {output_path}")
+    print(f"  Mode:          {mode} (from {mode_source})")
+    print(f"  iBAR length:   {ibar_length}")
+    print(f"  Design file:   {design_path}")
+    print(f"  Output:        {output_path}")
     print(f"  Rev-comp iBAR: {rev_comp}")
     print()
 
@@ -598,7 +756,10 @@ def main():
     print(f"  Columns: {list(design_df.columns)}")
 
     # Format reference
-    ref_df = format_reference(design_df, rev_comp_ibar=rev_comp)
+    if mode == "single":
+        ref_df = format_reference_single(design_df, rev_comp_ibar=rev_comp, ibar_length=ibar_length)
+    else:
+        ref_df = format_reference(design_df, rev_comp_ibar=rev_comp, ibar_length=ibar_length)
 
     # Print summary
     print_summary(ref_df)
@@ -608,7 +769,7 @@ def main():
         grna_cfg = cfg.get('grna_matching', {})
         max_lev_grna = grna_cfg.get('max_lev_dist', 3)
         max_lev_ibar = grna_cfg.get('max_lev_dist_ibar', 3)
-        check_reference_overlap(ref_df, max_lev_grna, max_lev_ibar)
+        check_reference_overlap(ref_df, max_lev_grna, max_lev_ibar, ibar_length=ibar_length)
 
     # Save
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -616,10 +777,13 @@ def main():
     print(f"\n  ✓ Saved reference to {output_path}")
 
     # Also save the iBAR → pair_id lookup as a separate file for convenience
-    ibar_lookup = ref_df[['ibar_seq', 'pair_id', 'target_combo', 'target_version']].drop_duplicates()
-    lookup_path = output_path.replace('.csv', '_ibar_lookup.csv')
-    ibar_lookup.to_csv(lookup_path, index=False)
-    print(f"  ✓ Saved iBAR→pair_id lookup to {lookup_path}")
+    if ibar_length > 0:
+        ibar_lookup = ref_df[['ibar_seq', 'pair_id', 'target_combo', 'target_version']].drop_duplicates()
+        lookup_path = output_path.replace('.csv', '_ibar_lookup.csv')
+        ibar_lookup.to_csv(lookup_path, index=False)
+        print(f"  ✓ Saved iBAR→pair_id lookup to {lookup_path}")
+    else:
+        print(f"  ✓ Skipped iBAR→pair_id lookup (ibar_length=0)")
 
     print(f"\n{'='*60}")
     print(f"  Step 0 complete!")
