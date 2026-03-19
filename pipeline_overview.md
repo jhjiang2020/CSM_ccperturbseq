@@ -181,13 +181,22 @@ bash submit/submit_pipeline.sh --dry-run
 bash submit/submit_pipeline.sh --config /path/to/my_config.yaml
 ```
 
-#### Step 0 (run locally, not on cluster)
+#### Step 0 (run locally, or on UGER's interactive node)
 
-Step 0 is fast and runs locally — it converts the CSM design file to the pipeline reference format:
+Step 0 converts the CSM design file to the pipeline reference format and performs an overlap safety check. This check computes **O(n²)** pairwise Levenshtein distances to ensure gRNAs and iBARs can be uniquely resolved using the specified `max_lev_dist`and `max_lev_dist_ibar`.
 
-```bash
-python scripts/00_format_reference.py --config config.yaml
-```
+> [!TIP]
+>For my pilot library (~500 pairs, ~1000 sequences) this takes <10 seconds. For large libraries, this step can take significantly longer and consume substantial memory. It is therefore recommended to run this step on an **interactive node**:
+>```bash
+>qrsh -q interactive -l h_vmem=4G
+>conda activate splitpipe
+>python scripts/00_format_reference.py --config config.yaml
+>```
+> If your library is extremely large (e.g., >10,000 pairs) and is optimized with high edit distance, the sequence distance validations can be safely bypassed using the `--skip-check` argument to drastically accelerate this step:
+> ```bash
+> python scripts/00_format_reference.py --config config.yaml --skip-check
+> ```
+
 
 #### Monitoring jobs
 
@@ -319,13 +328,6 @@ python scripts/00_format_reference.py --check-only references/grna_ibar_referenc
 > [!NOTE]
 > Step 3's `NeighborhoodMatcher` always returns the **unique best match**. When multiple references tie at the same best distance, the read is marked **ambiguous** and discarded — there is no risk of wrong assignment, only data loss. Users can safely proceed with overlapping references if they accept some ambiguous-read loss (visible in Step 3 QC as "% ambiguous").
 
-> [!TIP]
-> The overlap check computes **O(n²)** pairwise Levenshtein distances in pure Python. For a typical library (~700 constructs, ~1400 sequences) this takes ~10–30 seconds. For large libraries (>5000 constructs) it may take several minutes. **Run Step 0 on an interactive node** rather than submitting via `qsub`:
-> ```bash
-> qrsh -q interactive -l h_vmem=4G
-> conda activate splitpipe
-> python scripts/00_format_reference.py --config config.yaml
-> ```
 
 ---
 

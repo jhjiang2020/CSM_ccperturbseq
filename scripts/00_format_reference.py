@@ -302,8 +302,20 @@ def format_reference_single(design_df, rev_comp_ibar=True, ibar_length=None):
 # Levenshtein distance (self-contained for Step 0)
 # ---------------------------------------------------------------------------
 
+try:
+    import edlib
+    HAS_EDLIB = True
+except ImportError:
+    HAS_EDLIB = False
+
 def _levenshtein(s1, s2, max_dist=None):
     """Compute Levenshtein edit distance with optional early termination."""
+    if HAS_EDLIB:
+        d = edlib.align(s1, s2, mode="NW", task="distance", k=max_dist if max_dist is not None else -1)["editDistance"]
+        if max_dist is not None and d == -1:
+            return max_dist + 1
+        return d
+
     if s1 == s2:
         return 0
     len1, len2 = len(s1), len(s2)
@@ -414,6 +426,8 @@ def check_reference_overlap(ref_df, max_lev_dist_grna, max_lev_dist_ibar, ibar_l
     # 1. gRNA sequence overlap (Levenshtein distance)
     # ------------------------------------------------------------------
     print(f"\n  Checking gRNA sequence uniqueness (max_lev_dist={max_lev_dist_grna})...")
+    if not HAS_EDLIB and len(ref_df) > 1000:
+        print(f"    ⚠ WARNING: edlib is not installed. Computing {len(ref_df)**2//2} pairwise distances in pure Python will be slow!")
 
     unique_grnas = ref_df.drop_duplicates('grna_seq')[['grna_seq', 'grna_name']].values.tolist()
     n_grnas = len(unique_grnas)
@@ -421,12 +435,20 @@ def check_reference_overlap(ref_df, max_lev_dist_grna, max_lev_dist_ibar, ibar_l
 
     critical_pairs = []
     warning_pairs = []
+    
+    from collections import defaultdict
+    grna_dist_counts = defaultdict(int)
+    min_grna_d = float('inf')
 
     for i in range(n_grnas):
+        seq_a, name_a = unique_grnas[i]
         for j in range(i + 1, n_grnas):
-            seq_a, name_a = unique_grnas[i]
             seq_b, name_b = unique_grnas[j]
-            d = _levenshtein(seq_a, seq_b, max_dist=scan_dist)
+            d = _levenshtein(seq_a, seq_b) # compute full distance so we can track min and median
+            grna_dist_counts[d] += 1
+            if d < min_grna_d:
+                min_grna_d = d
+            
             if d <= max_lev_dist_grna:
                 critical_pairs.append((name_a, name_b, d, seq_a, seq_b))
             elif d <= scan_dist:
@@ -453,18 +475,22 @@ def check_reference_overlap(ref_df, max_lev_dist_grna, max_lev_dist_ibar, ibar_l
 
     # Min pairwise distance among all gRNAs
     if n_grnas > 1:
-        all_grna_dists = []
-        for i in range(n_grnas):
-            for j in range(i + 1, n_grnas):
-                d = _levenshtein(unique_grnas[i][0], unique_grnas[j][0])
-                all_grna_dists.append(d)
-        min_d = min(all_grna_dists)
-        print(f"\n    gRNA pairwise distance stats:")
-        print(f"      Minimum:  {min_d}")
-        print(f"      Median:   {sorted(all_grna_dists)[len(all_grna_dists)//2]}")
-        print(f"      Safe max_lev_dist for gRNA: ≤ {(min_d - 1) // 2} "
+        # compute median from histogram
+        total_pairs = n_grnas * (n_grnas - 1) // 2
+        median_d = 0
+        cumulative = 0
+        for md in sorted(grna_dist_counts.keys()):
+            cumulative += grna_dist_counts[md]
+            if cumulative >= total_pairs / 2:
+                median_d = md
+                break
+                
+        print(f"\n    gRNA pairwise distance stats (total {total_pairs} pairs):")
+        print(f"      Minimum:  {min_grna_d}")
+        print(f"      Median:   {median_d}")
+        print(f"      Safe max_lev_dist for gRNA: ≤ {(min_grna_d - 1) // 2 if min_grna_d > 0 else 0} "
               f"(guarantees no overlap)")
-        if min_d <= max_lev_dist_grna:
+        if min_grna_d <= max_lev_dist_grna:
             print(f"      → Current max_lev_dist={max_lev_dist_grna} EXCEEDS safe limit!")
 
     # ------------------------------------------------------------------
@@ -481,26 +507,39 @@ def check_reference_overlap(ref_df, max_lev_dist_grna, max_lev_dist_ibar, ibar_l
         unique_ibars = ref_df.drop_duplicates('ibar_seq')[['ibar_seq', 'pair_id']].values.tolist()
         n_ibars = len(unique_ibars)
 
-        global_ibar_dists = []
         global_ibar_critical = []
         global_ibar_warning = []
+        
+        global_ibar_dist_counts = defaultdict(int)
+        min_global_ibar_d = float('inf')
 
         for i in range(n_ibars):
+            seq_a, pair_a = unique_ibars[i]
             for j in range(i + 1, n_ibars):
-                seq_a, pair_a = unique_ibars[i]
                 seq_b, pair_b = unique_ibars[j]
-                d = _levenshtein(seq_a, seq_b, max_dist=ibar_scan_dist)
-                global_ibar_dists.append(d)
+                d = _levenshtein(seq_a, seq_b) # compute full
+                global_ibar_dist_counts[d] += 1
+                if d < min_global_ibar_d:
+                    min_global_ibar_d = d
+                
                 if d <= max_lev_dist_ibar:
                     global_ibar_critical.append((pair_a, pair_b, d, seq_a, seq_b))
                 elif d <= ibar_scan_dist:
                     global_ibar_warning.append((pair_a, pair_b, d, seq_a, seq_b))
 
-        if global_ibar_dists:
-            min_d = min(global_ibar_dists)
-            print(f"\n    Global iBAR pairwise distance stats ({n_ibars} unique iBARs):")
-            print(f"      Minimum:  {min_d}")
-            print(f"      Median:   {sorted(global_ibar_dists)[len(global_ibar_dists)//2]}")
+        global_pairs_total = n_ibars * (n_ibars - 1) // 2
+        if global_pairs_total > 0:
+            median_d = 0
+            cumulative = 0
+            for md in sorted(global_ibar_dist_counts.keys()):
+                cumulative += global_ibar_dist_counts[md]
+                if cumulative >= global_pairs_total / 2:
+                    median_d = md
+                    break
+                    
+            print(f"\n    Global iBAR pairwise distance stats ({n_ibars} unique iBARs, {global_pairs_total} comparisons):")
+            print(f"      Minimum:  {min_global_ibar_d}")
+            print(f"      Median:   {median_d}")
             if global_ibar_critical:
                 print(f"      {len(global_ibar_critical)} pair(s) within dist≤{max_lev_dist_ibar} globally")
                 for pa, pb, d, sa, sb in global_ibar_critical[:5]:
@@ -523,14 +562,20 @@ def check_reference_overlap(ref_df, max_lev_dist_grna, max_lev_dist_ibar, ibar_l
 
         ibar_critical = []
         ibar_warning = []
-        all_ibar_min_dists = []
+        all_ibar_min_dist = float('inf')
+        all_ibar_dist_counts = defaultdict(int)
+        all_ibar_total_pairs = 0
 
         for grna_name, ibars in grna_ibars.items():
             if len(ibars) < 2:
                 continue
             for (seq_a, pair_a), (seq_b, pair_b) in combinations(ibars, 2):
-                d = _levenshtein(seq_a, seq_b, max_dist=ibar_scan_dist)
-                all_ibar_min_dists.append(d)
+                d = _levenshtein(seq_a, seq_b)
+                all_ibar_dist_counts[d] += 1
+                all_ibar_total_pairs += 1
+                if d < all_ibar_min_dist:
+                    all_ibar_min_dist = d
+                
                 if d <= max_lev_dist_ibar:
                     ibar_critical.append((grna_name, pair_a, pair_b, d, seq_a, seq_b))
                 elif d <= ibar_scan_dist:
@@ -554,14 +599,21 @@ def check_reference_overlap(ref_df, max_lev_dist_grna, max_lev_dist_ibar, ibar_l
             if len(ibar_warning) > 5:
                 print(f"      ... and {len(ibar_warning) - 5} more")
 
-        if all_ibar_min_dists:
-            min_d = min(all_ibar_min_dists)
-            print(f"\n    Per-gRNA iBAR pairwise distance stats:")
-            print(f"      Minimum:  {min_d}")
-            print(f"      Median:   {sorted(all_ibar_min_dists)[len(all_ibar_min_dists)//2]}")
-            print(f"      Safe max_lev_dist_ibar: ≤ {(min_d - 1) // 2} "
+        if all_ibar_total_pairs > 0:
+            median_d = 0
+            cumulative = 0
+            for md in sorted(all_ibar_dist_counts.keys()):
+                cumulative += all_ibar_dist_counts[md]
+                if cumulative >= all_ibar_total_pairs / 2:
+                    median_d = md
+                    break
+                    
+            print(f"\n    Per-gRNA iBAR pairwise distance stats ({all_ibar_total_pairs} comparisons):")
+            print(f"      Minimum:  {all_ibar_min_dist}")
+            print(f"      Median:   {median_d}")
+            print(f"      Safe max_lev_dist_ibar: ≤ {(all_ibar_min_dist - 1) // 2 if all_ibar_min_dist > 0 else 0} "
                   f"(guarantees no overlap)")
-            if min_d <= max_lev_dist_ibar:
+            if all_ibar_min_dist <= max_lev_dist_ibar:
                 print(f"      → Current max_lev_dist_ibar={max_lev_dist_ibar} EXCEEDS safe limit!")
 
     # ------------------------------------------------------------------
@@ -663,6 +715,8 @@ def main():
                         help="Override max Levenshtein distance for gRNA (default: from config or 3)")
     parser.add_argument("--max-lev-dist-ibar", type=int, default=None,
                         help="Override max Levenshtein distance for iBAR (default: from config or 3)")
+    parser.add_argument("--skip-check", action="store_true",
+                        help="Bypass reference overlap distance check entirely (useful for very large libraries)")
     args = parser.parse_args()
 
     # --- Check-only mode: just run overlap analysis on existing reference ---
@@ -689,7 +743,12 @@ def main():
         ref_df = pd.read_csv(ref_path)
         print(f"  Loaded {len(ref_df)} entries")
         print_summary(ref_df)
-        has_critical = check_reference_overlap(ref_df, max_lev_grna, max_lev_ibar)
+        if not args.skip_check:
+            has_critical = check_reference_overlap(ref_df, max_lev_grna, max_lev_ibar)
+        else:
+            print("\n  ⚠ Overlap check bypassed via --skip-check")
+            has_critical = False
+            
         print(f"\n{'='*60}")
         sys.exit(1 if has_critical else 0)
 
@@ -765,11 +824,13 @@ def main():
     print_summary(ref_df)
 
     # Run overlap check if config provides distance parameters
-    if args.config:
+    if args.config and not args.skip_check:
         grna_cfg = cfg.get('grna_matching', {})
         max_lev_grna = grna_cfg.get('max_lev_dist', 3)
         max_lev_ibar = grna_cfg.get('max_lev_dist_ibar', 3)
         check_reference_overlap(ref_df, max_lev_grna, max_lev_ibar, ibar_length=ibar_length)
+    elif args.skip_check:
+        print("\n  ⚠ Skipped reference overlap check (--skip-check)")
 
     # Save
     os.makedirs(os.path.dirname(output_path), exist_ok=True)

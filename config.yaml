@@ -12,6 +12,15 @@
 # Name of this analysis run (used in output directory names and reports)
 analysis_name: "CSM_ccperturbseq"
 
+# --- Environment ---
+# Conda configuration for HPC job scripts
+environment:
+  # Path to conda installation (parent of condabin/)
+  # Run `conda info --base` in your terminal to find this path if unsure.
+  conda_prefix: "/home/unix/jjiahao/my-conda/"
+  # Conda environment name to activate for pipeline scripts
+  conda_env: "splitpipe"
+
 # --- Paths ---
 paths:
   # Root directory where the pipeline lives
@@ -84,11 +93,17 @@ splitpipe:
   bypass_kit_score: true
 
 # --- Library Definitions ---
+# The pipeline dynamically scales its array jobs based on the number of entries
+# in this list. You can flexibly add or remove sublibraries.
 # Each entry maps a GEX sublibrary to its paired gRNA sublibrary.
-# sublibrary_name: arbitrary label for this pair
-# gex_prefix: FASTQ filename prefix for the GEX library (before _R1/_R2)
-# grna_prefix: FASTQ filename prefix for the gRNA library (before _R1/_R2)
-# sample_name: biological sample name for metadata annotation
+# sublibrary_name: Arbitrary label for this pair (e.g., C1, C2).
+# gex_prefix: FASTQ prefix for the GEX library. Used as a keyword/glob search. 
+#             The pipeline executes: find fastq_dir/ -name "*{gex_prefix}*_R1_*fastq.gz"
+#             Test your prefix with this command to ensure it matches your files!
+# grna_prefix: FASTQ prefix for the gRNA library. 
+#              Tested the same way: find fastq_dir/ -name "*{grna_prefix}*_R1_*.fastq.gz"
+# sample_name: Biological sample name for metadata annotation. Sublibraries 
+#              sharing a sample_name will be merged.
 libraries:
   - sublibrary_name: "C1"
     gex_prefix: "CSMC1"
@@ -139,6 +154,8 @@ libraries:
 # Mismatches in fixed sequences do NOT affect gRNA/iBAR assignment —
 # they are only used as positional anchors.
 grna_structure:
+  # Whether to use single-guide mode. If true, skips reading/enforcing stem-specific fixed_seq_3 and fixed_seq_5.
+  single_guide_mode: false
   # Split_TSO: universal anchor at the start of R1 (Parse template-switching oligo)
   fixed_seq_1: "AAGCAGTGGTATCAACGCAGAGTGAATGGG"
   # CSM_stem_1: variant A scaffold between gRNA and iBAR (19bp)
@@ -182,8 +199,9 @@ grna_matching:
 
 # --- Cell-Level gRNA Assignment ---
 guide_assignment:
-  # Whether to use logic for dual-guide pairs (grouping by pos1/pos2 and inferring half-detected).
-  dual_guide_mode: true
+  # Whether to use counting logic for dual-guide pairs (grouping by pos1/pos2 and inferring half-detected).
+  # Note: This controls the downstream UMI counting step.
+  dual_guide_counting_mode: true
   # Minimum UMI threshold for calling a guide (or guide pair) as "present" in a cell.
   # In dual_guide_mode:
   #   - Complete pairs (both pos1 + pos2 detected): threshold is applied to the
