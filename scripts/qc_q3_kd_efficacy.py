@@ -92,44 +92,53 @@ def classify_cells_full(adata, verbose=True):
     )
     cell_sets['perfect_singlet'] = assigned[set1_mask].copy()
 
-    # --- Set 2: Inferred singlets (singlet + inferred) ---
-    set2_mask = (
+    # --- Sets 2 & 3: Inferred singlets (pos1_missing and pos2_missing) ---
+    inferred_mask = (
         (assigned['combo_type'] == 'singlet') &
         (assigned['detection_status'] == 'inferred')
     )
-    cell_sets['inferred_singlet'] = assigned[set2_mask].copy()
+    inferred = assigned[inferred_mask].copy()
 
-    # --- Multiplets ---
+    if 'pos1_umi' in inferred.columns and 'pos2_umi' in inferred.columns:
+        cell_sets['inferred_singlet_pos1_missing'] = inferred[inferred['pos1_umi'] == 0].copy()
+        cell_sets['inferred_singlet_pos2_missing'] = inferred[inferred['pos2_umi'] == 0].copy()
+    else:
+        has_inf_p1 = 'inferred_pos1_grna' in inferred.columns
+        has_inf_p2 = 'inferred_pos2_grna' in inferred.columns
+        if has_inf_p1:
+            p1_mask = inferred['inferred_pos1_grna'].fillna('') != ''
+            cell_sets['inferred_singlet_pos1_missing'] = inferred[p1_mask].copy()
+        else:
+            cell_sets['inferred_singlet_pos1_missing'] = inferred.iloc[0:0].copy()
+        if has_inf_p2:
+            p2_mask = inferred['inferred_pos2_grna'].fillna('') != ''
+            cell_sets['inferred_singlet_pos2_missing'] = inferred[p2_mask].copy()
+        else:
+            cell_sets['inferred_singlet_pos2_missing'] = inferred.iloc[0:0].copy()
+
+    # --- Sets 4, 5, 6: Multiplets ---
     multi_mask = assigned['combo_type'] == 'multiplet'
-    multiplets = assigned[multi_mask]
+    multi = assigned[multi_mask].copy()
 
-    # Set 3: Perfect multiplets — multiplet cells where ALL detection statuses are 'complete'
-    # (both positions detected for every combo in the cell)
-    set3_mask = multi_mask & (assigned['detection_status'] == 'complete')
-    cell_sets['perfect_multiplet'] = assigned[set3_mask].copy()
+    # Check for presence of 'complete' and 'inferred' in the potentially joined status strings
+    has_complete = multi['detection_status'].str.contains('complete', na=False)
+    has_inferred = multi['detection_status'].str.contains('inferred', na=False)
 
-    # Set 4: Multiplet mismatch — multiplet, contains both 'complete' and 'inferred' combos
-    # This means both positions were detected, but the cell has multiple pair assignments
-    # with mixed detection (some complete, some inferred → likely recombination)
-    set4_mask = (
-        multi_mask &
-        assigned['detection_status'].str.contains('complete', na=False) &
-        assigned['detection_status'].str.contains('inferred', na=False)
-    )
-    cell_sets['inferred_multi_mismatch'] = assigned[set4_mask].copy()
+    mc_mask = has_complete & ~has_inferred
+    mi_mask = has_inferred & ~has_complete
+    mm_mask = has_complete & has_inferred
 
-    # Set 5: Single-pos multiplets — multiplet where ALL detection statuses are 'inferred'
-    # (only one position detected, the other always inferred)
-    set5_mask = multi_mask & (assigned['detection_status'] == 'inferred')
-    cell_sets['inferred_multi_single_pos'] = assigned[set5_mask].copy()
+    cell_sets['multiplet_all_complete'] = multi[mc_mask].copy()
+    cell_sets['multiplet_all_inferred'] = multi[mi_mask].copy()
+    cell_sets['multiplet_mixed'] = multi[mm_mask].copy()
 
-    # Catch remaining multiplets not classified above
-    classified_multi = set3_mask | set4_mask | set5_mask
-    remaining_multi = multi_mask & ~classified_multi
+    # Catch remaining multiplets (e.g. unexpected missing status)
+    classified_multi = mc_mask | mi_mask | mm_mask
+    remaining_multi = ~classified_multi
     if remaining_multi.sum() > 0:
-        cell_sets['multiplet_other'] = assigned[remaining_multi].copy()
+        cell_sets['multiplet_other'] = multi[remaining_multi].copy()
 
-    # --- Set 6: Unassigned ---
+    # --- Set 7: Unassigned ---
     cell_sets['unassigned'] = unassigned.copy()
 
     # --- Summary ---
@@ -173,6 +182,11 @@ def classify_cells(adata, min_cells_per_set=None, group_by_gene_per_set=None):
         gbg_defaults.update(group_by_gene_per_set)
 
     full = classify_cells_full(adata, verbose=True)
+    
+    # Reconstruct combined inferred_singlet for legacy compatibility in Q3
+    inferred_singlet = pd.concat([full['inferred_singlet_pos1_missing'], full['inferred_singlet_pos2_missing']])
+    full['inferred_singlet'] = inferred_singlet
+
     return {
         name: (full[name], mc_defaults.get(name, 10), gbg_defaults.get(name, False))
         for name in ['perfect_singlet', 'inferred_singlet']
@@ -628,7 +642,277 @@ def get_grna_any_cells(cell_df, group_by_gene=False):
                 'n_cells': len(unique_bcs),
             })
 
-    return groups
+def filter_and_compute_inferred_gene_kd(adata, umi_df, ctrl_bcs_per_sample, backend='custom', exclude_combos=None, group_by_gene=True, min_cells=5):
+    """
+    Groups inferred singlets by gene, strict-filters cells that might have received 
+    another guide for the 'missing' gene (UMI > 0), and computes KD metrics for both 
+    the detected target and the inferred (missing) target against control cells.
+
+    Args:
+        adata: AnnData object.
+        umi_df: DataFrame containing all UMI counts.
+        ctrl_bcs_per_sample: Dict mapping sample_name -> list of control cell barcodes.
+        backend: Which calculation backend to use ('custom' for fast scipy or 'scanpy').
+        exclude_combos: List of gene combos (e.g. ['MAPK7_CCM2']) to exclude.
+        group_by_gene: If False, computes on a per-guide level and falls back to genepool if < min_cells.
+        min_cells: Minimum number of cells required per perturbation subset for DE testing.
+
+    Returns:
+        A combined DataFrame of KD results mapping the target combos to the DE outcome.
+    """
+    import pandas as pd
+    import numpy as np
+
+    # Build the inferred singlet dataframe directly from properly-filtered adata.obs
+    obs_df = adata.obs
+    inf = obs_df[(obs_df['detection_status'] == 'inferred') & 
+                 (obs_df['combo_type'] == 'singlet')].copy()
+
+    if inf.empty:
+        return pd.DataFrame()
+
+    inf['bc_wells'] = inf.index
+
+    # 1. Determine the missing and detected genes and guides per cell
+    p1_inf = inf.get('inferred_pos1_target', inf.get('pos1_target'))
+    p2_inf = inf.get('inferred_pos2_target', inf.get('pos2_target'))
+    p1_det = inf.get('pos1_target')
+    p2_det = inf.get('pos2_target')
+
+    p1_guide_inf = inf.get('inferred_pos1_grna', inf.get('pos1_grna'))
+    p2_guide_inf = inf.get('inferred_pos2_grna', inf.get('pos2_grna'))
+    p1_guide_det = inf.get('pos1_grna')
+    p2_guide_det = inf.get('pos2_grna')
+
+    inf['missing_gene'] = np.where(inf['pos1_umi'] == 0, p1_inf,
+                                   np.where(inf['pos2_umi'] == 0, p2_inf, np.nan))
+    inf['detected_gene'] = np.where(inf['pos1_umi'] == 0, p2_det,
+                                    np.where(inf['pos2_umi'] == 0, p1_det, np.nan))
+    
+    inf['missing_guide'] = np.where(inf['pos1_umi'] == 0, p1_guide_inf,
+                                    np.where(inf['pos2_umi'] == 0, p2_guide_inf, np.nan))
+    inf['detected_guide'] = np.where(inf['pos1_umi'] == 0, p2_guide_det,
+                                     np.where(inf['pos2_umi'] == 0, p1_guide_det, np.nan))
+                                     
+    # Preserve blank strings or pseudo-null 'unassigned' markers so viable partners aren't wiped
+    inf['missing_gene'] = inf['missing_gene'].replace({'': 'unassigned'})
+    inf['detected_gene'] = inf['detected_gene'].replace({'': 'unassigned'})
+    inf['missing_guide'] = inf['missing_guide'].replace({'': 'unassigned'})
+    inf['detected_guide'] = inf['detected_guide'].replace({'': 'unassigned'})
+    
+    inf = inf.dropna(subset=['missing_gene', 'detected_gene'])
+
+    # Exclude confounding combos if provided
+    if exclude_combos:
+        exclude_set = set(exclude_combos)
+        combo_str1 = inf['detected_gene'].astype(str) + '_' + inf['missing_gene'].astype(str)
+        combo_str2 = inf['missing_gene'].astype(str) + '_' + inf['detected_gene'].astype(str)
+        mask = (~combo_str1.isin(exclude_set)) & (~combo_str2.isin(exclude_set))
+        inf = inf[mask]
+        
+    if inf.empty:
+        return pd.DataFrame()
+
+    # 2. Filter cells by checking umi_df for ANY expression of the 'missing_gene'
+    cell_bcs = set(inf['bc_wells'])
+    sub_umi = umi_df[umi_df['bc_wells'].isin(cell_bcs)].copy()
+    
+    missing_gene_map = inf.set_index('bc_wells')['missing_gene'].to_dict()
+    sub_umi['expected_missing_gene'] = sub_umi['bc_wells'].map(missing_gene_map)
+    
+    sub_umi['is_missing_gene_guide'] = sub_umi.apply(
+        lambda r: str(r['grna_name']).startswith(str(r['expected_missing_gene']) + '_'), axis=1
+    )
+    
+    residual_expr = sub_umi[(sub_umi['is_missing_gene_guide']) & (sub_umi['umi_count'] > 0)]
+    contaminated_bcs = set(residual_expr['bc_wells'])
+    
+    pure_inf = inf[~inf['bc_wells'].isin(contaminated_bcs)]
+    
+    print(f"Filter Inferred Singlets (Gene-level): {len(inf):,} total -> {len(pure_inf):,} pure subsets (0 UMIs for all contaminant guides)")
+    
+    # 3. Compute KD Metrics utilizing compute_kd_metrics (fast) or compute_custom_de (scanpy)
+    results = []
+
+    def compute_cpm(gene, group_bcs):
+        query_g = gene if gene in adata.var_names else f"{gene}_hg38"
+        if query_g not in adata.var_names: return np.nan
+        expr = adata[adata.obs.index.isin(group_bcs), query_g].X
+        if hasattr(expr, 'toarray'): expr = expr.toarray().flatten()
+        else: expr = np.asarray(expr).flatten()
+        return float(np.mean(np.expm1(expr) * 100))
+        
+    def is_control_target(g):
+        if pd.isna(g): return True
+        gs = str(g).lower()
+        if gs in ['unassigned', '', 'none', 'nan']: return True
+        if 'ctrl' in gs or 'safe' in gs or 'ntc' in gs: return True
+        return False
+        
+    def generate_guide_groups(df, gene_col, guide_col, mode_name, pos_name):
+        grp_list = []
+        if group_by_gene:
+            for gene, d in df.groupby(gene_col):
+                if is_control_target(gene): continue
+                bcs = list(set(d['bc_wells']).intersection(adata.obs.index))
+                if len(bcs) < min_cells: continue
+                grp_list.append({
+                    'target_gene': gene,
+                    'guide_name': mode_name,
+                    'position': pos_name,
+                    'target_combo': f"{gene}_pooled",
+                    'cell_barcodes': bcs,
+                    'actual_guide': f"{gene}_pooled"
+                })
+        else:
+            pooled_bcs = {g: list(set(d['bc_wells']).intersection(adata.obs.index)) 
+                          for g, d in df.groupby(gene_col) if not is_control_target(g)}
+            for (gene, guide), d in df.groupby([gene_col, guide_col]):
+                if is_control_target(gene): continue
+                bcs = list(set(d['bc_wells']).intersection(adata.obs.index))
+                if len(bcs) < min_cells:
+                    fb_bcs = pooled_bcs.get(gene, [])
+                    if len(fb_bcs) < min_cells: continue
+                    if not any(x['actual_guide'] == f"{gene}_all (fallback)" for x in grp_list):
+                        grp_list.append({
+                            'target_gene': gene,
+                            'guide_name': mode_name,
+                            'position': pos_name,
+                            'target_combo': f"{gene}_all (fallback)",
+                            'cell_barcodes': fb_bcs,
+                            'actual_guide': f"{gene}_all (fallback)"
+                        })
+                else:
+                    grp_list.append({
+                        'target_gene': gene,
+                        'guide_name': mode_name,
+                        'position': pos_name,
+                        'target_combo': guide,
+                        'cell_barcodes': bcs,
+                        'actual_guide': guide
+                    })
+        return grp_list
+    
+    for sample, s_df in pure_inf.groupby('sample'):
+        ctrl_bcs = ctrl_bcs_per_sample.get(sample, [])
+        if not ctrl_bcs or len(ctrl_bcs) < 3:
+            continue
+            
+        if backend == 'custom':
+            guide_groups = []
+            guide_groups.extend(generate_guide_groups(s_df, 'missing_gene', 'missing_guide', 'inferred_target_kd', 'missing'))
+            guide_groups.extend(generate_guide_groups(s_df, 'detected_gene', 'detected_guide', 'detected_target_kd', 'detected'))
+            
+            if guide_groups:
+                res_df = compute_kd_metrics(adata, guide_groups, ctrl_bcs, sample, min_cells=min_cells)
+                if not res_df.empty:
+                    # Rename metric columns to align natively with output schema expectations
+                    res_df = res_df.rename(columns={
+                        'guide_name': 'test_mode',
+                        'target_gene': 'readout_gene',
+                        'n_kd_cells': 'n_kd',
+                        'n_ctrl_cells': 'n_ctrl'
+                    })
+                    if not group_by_gene:
+                        ag_map = {g['target_combo']: g['actual_guide'] for g in guide_groups}
+                        res_df['guide_name'] = res_df['target_combo'].map(ag_map)
+                    
+                    res_df['p_adj'] = np.nan
+                    results.append(res_df)
+                    
+        else:
+            all_grps = []
+            all_grps.extend(generate_guide_groups(s_df, 'missing_gene', 'missing_guide', 'inferred_target_kd', 'missing'))
+            all_grps.extend(generate_guide_groups(s_df, 'detected_gene', 'detected_guide', 'detected_target_kd', 'detected'))
+                
+            for g in all_grps:
+                de_out = compute_custom_de(adata, g['cell_barcodes'], ctrl_bcs, readout_gene=g['target_gene'])
+                if de_out.empty: continue
+                
+                row = {
+                    'sample': sample,
+                    'target_combo': g['target_combo'],
+                    'test_mode': g['guide_name'],
+                    'readout_gene': g['target_gene'],
+                    'n_kd': len(g['cell_barcodes']),
+                    'n_ctrl': len(ctrl_bcs),
+                    'cpm_kd': compute_cpm(g['target_gene'], g['cell_barcodes']),
+                    'cpm_ctrl': compute_cpm(g['target_gene'], ctrl_bcs),
+                    'log2FC': de_out['logfoldchanges'].iloc[0],
+                    'p_adj': de_out['pvals_adj'].iloc[0] if 'pvals_adj' in de_out.columns else np.nan,
+                    'pvalue': de_out['pvals'].iloc[0],
+                }
+                if not group_by_gene:
+                    row['guide_name'] = g['actual_guide']
+                results.append(pd.DataFrame([row]))
+                
+    if not results:
+        return pd.DataFrame()
+        
+    return pd.concat(results, ignore_index=True)
+
+
+def compute_custom_de(adata, target_idx, ctrl_idx, readout_gene=None):
+    """
+    Perform differential expression (Wilcoxon) testing using Scanpy between an arbitrary 
+    list of target cells and control cells.
+
+    Args:
+        adata: AnnData object containing the expression matrix.
+        target_idx: List or index of cell barcodes for the target/treatment group.
+        ctrl_idx: List or index of cell barcodes for the control group.
+        readout_gene: (Optional) String or list of strings. If None, returns all genes tested.
+
+    Returns:
+        A pandas DataFrame of DE results with columns: names, scores, pvals, pvals_adj, logfoldchanges.
+    """
+    import scanpy as sc
+    import pandas as pd
+
+    # Filter to only cells that exist in the object
+    target_cells = list(set(target_idx).intersection(adata.obs.index))
+    ctrl_cells = list(set(ctrl_idx).intersection(adata.obs.index))
+
+    if len(target_cells) < 3 or len(ctrl_cells) < 3:
+        print(f"WARNING: Insufficient cells for DE test (Target: {len(target_cells)}, Ctrl: {len(ctrl_cells)}). Minimum 3 per group required.")
+        return pd.DataFrame()
+
+    # Subset the object for testing
+    bdata = adata[target_cells + ctrl_cells, :].copy()
+    
+    # Assign groups
+    bdata.obs['de_group'] = 'ctrl'
+    bdata.obs.loc[target_cells, 'de_group'] = 'target'
+    
+    # Run scanpy DE
+    sc.tl.rank_genes_groups(bdata, groupby='de_group', groups=['target'], reference='ctrl', method='wilcoxon')
+    
+    # Extract results to dataframe
+    result_df = sc.get.rank_genes_groups_df(bdata, group='target')
+    
+    # Filter by readout gene if specified
+    if readout_gene is not None:
+        if isinstance(readout_gene, str):
+            readout_gene = [readout_gene]
+            
+        valid_genes = []
+        for g in readout_gene:
+            if g in result_df['names'].values:
+                valid_genes.append(g)
+            elif f"{g}_hg38" in result_df['names'].values:
+                valid_genes.append(f"{g}_hg38")
+            else:
+                matches = result_df[result_df['names'].str.startswith(f"{g}_")]['names'].tolist()
+                if matches:
+                    valid_genes.extend(matches)
+        
+        if len(valid_genes) > 0:
+            result_df = result_df[result_df['names'].isin(valid_genes)]
+        else:
+            print(f"WARNING: None of the readout genes {readout_gene} were found in the dataset DE results.")
+            result_df = result_df.iloc[0:0]
+
+    return result_df
 
 
 def compute_kd_metrics(adata, guide_groups, ctrl_barcodes, sample_label, min_cells=10):
@@ -775,270 +1059,131 @@ def compute_kd_metrics(adata, guide_groups, ctrl_barcodes, sample_label, min_cel
     return pd.DataFrame(results)
 
 
-def plot_heatmap(result_df, save_path, title_suffix='', show_pval=False):
-    """Plot log2FC heatmap per guide × target gene."""
-    if result_df.empty:
-        return
-
-    # Only include guides with valid log2FC
-    valid = result_df.dropna(subset=['log2FC'])
-    if valid.empty:
-        return
-
-    for sample in valid['sample'].unique():
-        sample_df = valid[valid['sample'] == sample]
-
-        sample_df = sample_df.copy()
-
-        # Pivot: rows=guide_name, columns=target_gene
-        pivot_fc = sample_df.pivot_table(
-            index='guide_name', columns='target_gene',
-            values='log2FC', aggfunc='first'
-        )
-        pivot_n = sample_df.pivot_table(
-            index='guide_name', columns='target_gene', values='n_kd_cells', aggfunc='first'
-        )
-        
-        pivot_cpm_kd = sample_df.pivot_table(
-            index='guide_name', columns='target_gene', values='cpm_kd', aggfunc='first'
-        )
-
-        pivot_pval = None
-        if show_pval and 'pvalue' in sample_df.columns:
-            pivot_pval = sample_df.pivot_table(
-                index='guide_name', columns='target_gene', values='pvalue', aggfunc='first'
-            )
-        
-        # Calculate mean ctrl CPM per target gene for column labels
-        avg_cpm_ctrl = sample_df.groupby('target_gene')['cpm_ctrl'].mean()
-
-        if pivot_fc.empty or pivot_fc.shape[0] < 1:
-            continue
-
-        # Skip if all values are NaN
-        if np.all(np.isnan(pivot_fc.values)):
-            continue
-
-        # Increase row height when showing pval to avoid crowding
-        row_height = 1.8 if show_pval else 1.5
-        fig, ax = plt.subplots(figsize=(max(8, len(pivot_fc.columns) * 0.8),
-                                         max(4, len(pivot_fc.index) * row_height)))
-
-        # Sort by target gene for readability
-        pivot_fc = pivot_fc.reindex(sorted(pivot_fc.columns), axis=1)
-        pivot_n = pivot_n.reindex(sorted(pivot_n.columns), axis=1)
-        pivot_cpm_kd = pivot_cpm_kd.reindex(sorted(pivot_cpm_kd.columns), axis=1)
-        if pivot_pval is not None:
-            pivot_pval = pivot_pval.reindex(pivot_fc.index, axis=0).reindex(pivot_fc.columns, axis=1)
-
-        # Sort guides (gRNA_1, gRNA_2, gRNA_3)
-        pivot_fc = pivot_fc.reindex(sorted(pivot_fc.index), axis=0)
-        pivot_n = pivot_n.reindex(sorted(pivot_n.index), axis=0)
-        pivot_cpm_kd = pivot_cpm_kd.reindex(sorted(pivot_cpm_kd.index), axis=0)
-
-        im = ax.imshow(pivot_fc.values, aspect='auto', cmap='RdBu_r',
-                       vmin=-3, vmax=3)
-                       
-        # Build x-tick labels with target gene and baseline ctrl CPM
-        x_labels = []
-        for col in pivot_fc.columns:
-            ctrl_val = avg_cpm_ctrl.get(col, np.nan)
-            label = f"{col}\n(Ctrl CPM={ctrl_val:.1f})" if not np.isnan(ctrl_val) else col
-            x_labels.append(label)
-                       
-        ax.set_xticks(range(len(pivot_fc.columns)))
-        ax.set_xticklabels(x_labels, rotation=45, ha='right', rotation_mode='anchor', fontsize=9)
-        ax.set_yticks(range(len(pivot_fc.index)))
-        ax.set_yticklabels(pivot_fc.index, fontsize=8)
-        ax.set_title(f'Guide KD Efficacy — {sample}{title_suffix}', fontsize=12)
-        ax.set_xlabel('Target Gene')
-        ax.set_ylabel('Guide')
-
-        cbar = plt.colorbar(im, ax=ax, shrink=0.6)
-        cbar.set_label('log₂FC vs ctrl_ctrl')
-
-        # Add text annotations
-        max_abs_fc = np.nanmax(np.abs(pivot_fc.values))
-        font_size = 6 if show_pval else 7
-        for i in range(len(pivot_fc.index)):
-            for j in range(len(pivot_fc.columns)):
-                value = pivot_fc.values[i, j]
-                n_cells = pivot_n.values[i, j]
-                cpm_k = pivot_cpm_kd.values[i, j]
-
-                if not np.isnan(value) and not np.isnan(n_cells) and not np.isnan(cpm_k):
-                    # Make text white if background is dark
-                    text_color = "white" if abs(value) > max_abs_fc * 0.5 else "black"
-                    
-                    annot_text = f"lfc: {value:.2f}\ncpm: {cpm_k:.1f}\nn: {int(n_cells)}"
-                    if show_pval and pivot_pval is not None:
-                        pv = pivot_pval.values[i, j]
-                        if not np.isnan(pv):
-                            annot_text += f"\np: {pv:.1e}"
-                    ax.text(j, i, annot_text, 
-                            ha='center', va='center', color=text_color, fontsize=font_size)
-
-        plt.tight_layout()
-        suffix = sample.lower().replace(' ', '_')
-        fig.savefig(save_path.replace('.png', f'_{suffix}.png'), dpi=150,
-                    bbox_inches='tight')
-        plt.close(fig)
-        print(f"    Saved heatmap: {save_path.replace('.png', f'_{suffix}.png')}")
 
 
-def plot_q1b_heatmap(result_df, save_path, title_suffix='', show_pval=True):
-    """Combined Q1b heatmap: 3 fixed rows × gene columns, one figure per sample.
-
-    Rows (in order):
-        1. perfect_all         — perfect singlets, all guide combos  (positive control)
-        2. detected_in_inferred — guide directly detected in inferred singlets
-        3. inferred_in_inferred — guide inferred from partner iBAR in inferred singlets
-
-    Columns: target genes, annotated with ctrl_ctrl CPM in the column label.
-    Each cell shows: lfc, cpm_kd, n, and optionally p-value.
-
-    One file per sample saved as:
-        save_path → save_path.replace('.png', '_control.png') etc.
+def plot_de_heatmap(result_df, save_path, title_suffix='', 
+                    row_key="guide_name", col_key="test_mode", color_key="log2FC", 
+                    split_by="sample", annotation_key=["cpm_kd", "pvalue", "n_kd_cells"]):
     """
-    ROW_ORDER = [
-        ('perfect_all',          'Perfect singlet (ctrl)'),
-        ('detected_in_inferred', 'Detected in inferred'),
-        ('inferred_in_inferred', 'Inferred in inferred'),
-    ]
-
+    Generic DE heatmap plotting function.
+    
+    Args:
+        result_df: DataFrame containing the data to plot (from compute_kd_metrics).
+        save_path: Base path to save the heatmap(s).
+        title_suffix: Optional string to append to the title.
+        row_key: DataFrame column name to use for the y-axis.
+        col_key: DataFrame column name to use for the x-axis.
+        color_key: DataFrame column name for the heatmap color intensity.
+        split_by: Column name to split the data into multiple plots. If None, plots all data.
+        annotation_key: List of column names to annotate each cell with.
+    """
     if result_df.empty:
         return
 
-    valid = result_df.dropna(subset=['log2FC'])
+    valid = result_df.dropna(subset=[color_key])
     if valid.empty:
         return
 
-    for sample in sorted(valid['sample'].unique()):
-        sample_df = valid[valid['sample'] == sample].copy()
+    splits = valid[split_by].dropna().unique() if split_by else [None]
 
-        # Collect all target genes across all rows so columns are consistent
-        all_genes = sorted(sample_df['target_gene'].unique())
-        if not all_genes:
-            continue
+    for split_val in sorted(splits):
+        if split_val is not None:
+            sample_df = valid[valid[split_by] == split_val].copy()
+            title = f'DE Heatmap — {split_val}{title_suffix}'
+            suffix = f"_{str(split_val).lower().replace(' ', '_')}"
+        else:
+            sample_df = valid.copy()
+            title = f'DE Heatmap{title_suffix}'
+            suffix = ''
 
-        # Build per-row pivot data — keyed by (mode_key, target_gene)
-        row_data = {}  # mode_key -> {gene: {log2FC, cpm_kd, n_kd_cells, pvalue}}
-        for mode_key, _label in ROW_ORDER:
-            mode_df = sample_df[sample_df['test_mode'] == mode_key]
-            if mode_df.empty:
-                row_data[mode_key] = {}
-                continue
-            # Use gene-level aggregate (one row per target_gene) — take the
-            # gene-pooled (guide_name == target_gene) row when present, else any.
-            agg = {}
-            for gene in mode_df['target_gene'].unique():
-                g = mode_df[mode_df['target_gene'] == gene]
-                # prefer the pooled (guide_name matches gene base) entry
-                pooled = g[g['guide_name'].str.startswith(gene.split('_')[0])]
-                best = pooled.iloc[0] if not pooled.empty else g.iloc[0]
-                agg[gene] = {
-                    'log2FC':     best['log2FC'],
-                    'cpm_kd':     best.get('cpm_kd', np.nan),
-                    'n_kd_cells': best.get('n_kd_cells', np.nan),
-                    'pvalue':     best.get('pvalue', np.nan),
-                }
-            row_data[mode_key] = agg
+        # 3. Throw a warning if row_key and col_key do not generate unique entries
+        counts = sample_df.groupby([row_key, col_key]).size()
+        if (counts > 1).any():
+            print(f"    ⚠ WARNING: The combination of row_key '{row_key}' and col_key '{col_key}' "
+                  f"(split_by '{split_by}') does not generate unique entries. Averaging duplicates.")
 
-        # Derive per-gene ctrl CPM from perfect_all row (most reliable)
-        ctrl_cpm_by_gene = {}
-        perf_df = sample_df[sample_df['test_mode'] == 'perfect_all']
-        for gene in all_genes:
-            g = perf_df[perf_df['target_gene'] == gene]
-            if not g.empty and 'cpm_ctrl' in g.columns:
-                ctrl_cpm_by_gene[gene] = g['cpm_ctrl'].mean()
-            else:
-                # fallback: any row
-                g2 = sample_df[sample_df['target_gene'] == gene]
-                ctrl_cpm_by_gene[gene] = g2['cpm_ctrl'].mean() if 'cpm_ctrl' in g2.columns else np.nan
-
-        n_rows = len(ROW_ORDER)
-        n_cols = len(all_genes)
-
-        # Build value matrices
-        fc_mat   = np.full((n_rows, n_cols), np.nan)
-        cpm_mat  = np.full((n_rows, n_cols), np.nan)
-        n_mat    = np.full((n_rows, n_cols), np.nan)
-        pval_mat = np.full((n_rows, n_cols), np.nan)
-
-        for ri, (mode_key, _) in enumerate(ROW_ORDER):
-            agg = row_data.get(mode_key, {})
-            for ci, gene in enumerate(all_genes):
-                if gene in agg:
-                    fc_mat[ri, ci]   = agg[gene]['log2FC']
-                    cpm_mat[ri, ci]  = agg[gene]['cpm_kd']
-                    n_mat[ri, ci]    = agg[gene]['n_kd_cells']
-                    pval_mat[ri, ci] = agg[gene]['pvalue']
-
-        # Skip if all values are NaN (nothing to show)
-        if np.all(np.isnan(fc_mat)):
-            continue
-
-        row_height = 2.0 if show_pval else 1.6
-        fig, ax = plt.subplots(
-            figsize=(max(8, n_cols * 0.9), max(4, n_rows * row_height))
+        # Pivot matrix for colors
+        pivot_color = sample_df.pivot_table(
+            index=row_key, columns=col_key, values=color_key, aggfunc='mean'
         )
+        
+        # Pivot matrices for annotations
+        annots = {}
+        if annotation_key:
+            for k in annotation_key:
+                if k in sample_df.columns:
+                    annots[k] = sample_df.pivot_table(
+                        index=row_key, columns=col_key, values=k, aggfunc='mean'
+                    )
+        
+        if pivot_color.empty or np.all(np.isnan(pivot_color.values)):
+            continue
 
-        im = ax.imshow(fc_mat, aspect='auto', cmap='RdBu_r', vmin=-3, vmax=3)
+        # Sort indices: preserve Categorical ordering if present, else alphabetical
+        if isinstance(sample_df[row_key].dtype, pd.CategoricalDtype):
+            row_order = [x for x in sample_df[row_key].cat.categories if x in pivot_color.index]
+        else:
+            row_order = sorted(pivot_color.index)
+            
+        if isinstance(sample_df[col_key].dtype, pd.CategoricalDtype):
+            col_order = [x for x in sample_df[col_key].cat.categories if x in pivot_color.columns]
+        else:
+            col_order = sorted(pivot_color.columns)
 
-        # Column labels: target gene + ctrl CPM
-        x_labels = []
-        for gene in all_genes:
-            ctrl_val = ctrl_cpm_by_gene.get(gene, np.nan)
-            if not np.isnan(ctrl_val):
-                x_labels.append(f"{gene}\n(Ctrl={ctrl_val:.1f} CPM)")
-            else:
-                x_labels.append(gene)
+        pivot_color = pivot_color.reindex(index=row_order, columns=col_order)
+        for k in annots:
+            annots[k] = annots[k].reindex(index=row_order, columns=col_order)
+
+        n_rows, n_cols = pivot_color.shape
+        row_height = 1.0 + 0.35 * len(annotation_key) if annotation_key else 1.2
+        fig, ax = plt.subplots(figsize=(max(8, n_cols * 1.5), max(4, n_rows * row_height)))
+
+        im = ax.imshow(pivot_color.values, aspect='auto', cmap='RdBu_r', vmin=-3, vmax=3)
 
         ax.set_xticks(range(n_cols))
-        ax.set_xticklabels(x_labels, rotation=45, ha='right',
-                            rotation_mode='anchor', fontsize=8)
-
-        row_labels = [label for _, label in ROW_ORDER]
+        ax.set_xticklabels(pivot_color.columns, rotation=45, ha='right', rotation_mode='anchor', fontsize=9)
         ax.set_yticks(range(n_rows))
-        ax.set_yticklabels(row_labels, fontsize=9)
-
-        ax.set_title(f'Q1b KD Efficacy Across Detection Modes — {sample}{title_suffix}',
-                     fontsize=12)
-        ax.set_xlabel('Target Gene')
-        ax.set_ylabel('Guide Detection Mode')
+        ax.set_yticklabels(pivot_color.index, fontsize=9)
+        ax.set_title(title, fontsize=12)
+        ax.set_xlabel(col_key)
+        ax.set_ylabel(row_key)
 
         cbar = plt.colorbar(im, ax=ax, shrink=0.6)
-        cbar.set_label('log₂FC vs ctrl_ctrl')
+        cbar.set_label(color_key)
 
-        # Annotate cells
-        max_abs_fc = np.nanmax(np.abs(fc_mat)) if not np.all(np.isnan(fc_mat)) else 1.0
-        font_size = 6 if show_pval else 7
-        for ri in range(n_rows):
-            for ci in range(n_cols):
-                val = fc_mat[ri, ci]
+        max_abs_val = np.nanmax(np.abs(pivot_color.values)) if not np.all(np.isnan(pivot_color.values)) else 1.0
+        font_size = 8 if len(annotation_key) <= 1 else 6
+
+        for i in range(n_rows):
+            for j in range(n_cols):
+                val = pivot_color.values[i, j]
                 if np.isnan(val):
-                    ax.text(ci, ri, 'n/a', ha='center', va='center',
-                            color='grey', fontsize=font_size)
+                    ax.text(j, i, 'n/a', ha='center', va='center', color='grey', fontsize=font_size)
                     continue
-                text_color = 'white' if abs(val) > max_abs_fc * 0.5 else 'black'
-                cpm_k = cpm_mat[ri, ci]
-                n_k   = n_mat[ri, ci]
-                annot = f"lfc: {val:.2f}"
-                if not np.isnan(cpm_k):
-                    annot += f"\ncpm: {cpm_k:.1f}"
-                if not np.isnan(n_k):
-                    annot += f"\nn: {int(n_k)}"
-                if show_pval and not np.isnan(pval_mat[ri, ci]):
-                    annot += f"\np: {pval_mat[ri, ci]:.1e}"
-                ax.text(ci, ri, annot,
-                        ha='center', va='center', color=text_color, fontsize=font_size)
+
+                text_color = 'white' if abs(val) > max_abs_val * 0.5 else 'black'
+
+                # Format annotation
+                annot_text = f"{color_key}: {val:.2f}"
+                for k in annotation_key:
+                    if k in annots:
+                        v = annots[k].values[i, j]
+                        if not np.isnan(v):
+                            if k == 'pvalue':
+                                annot_text += f"\n{k}: {v:.1e}"
+                            elif 'n_' in k or (isinstance(v, (int, float, np.number)) and float(v).is_integer()):
+                                annot_text += f"\n{k}: {int(v)}"
+                            else:
+                                annot_text += f"\n{k}: {v:.1f}"
+
+                ax.text(j, i, annot_text, ha='center', va='center', color=text_color, fontsize=font_size)
 
         plt.tight_layout()
-        suffix = sample.lower().replace(' ', '_')
-        out = save_path.replace('.png', f'_{suffix}.png')
-        fig.savefig(out, dpi=150, bbox_inches='tight')
+        out_path = save_path.replace('.png', f'{suffix}.png')
+        fig.savefig(out_path, dpi=150, bbox_inches='tight')
         plt.close(fig)
-        print(f"    Saved heatmap: {out}")
+        print(f"    Saved generic heatmap: {out_path}")
+
 
 
 def plot_volcano(result_df, save_path, title_suffix='', max_neg_log10p=20):
@@ -1107,7 +1252,7 @@ def plot_volcano_comparison(combined_df, save_path, title_suffix='', max_neg_log
       - 'inferred_in_inferred':  guide inferred from partner iBAR in inferred singlets
 
     Args:
-        combined_df: DataFrame with columns log2FC, pvalue, test_mode, target_gene, sample
+        combined_df: DataFrame with columns log2FC, pvalue, test_mode, guide_name, sample
         save_path: file to save the figure
         title_suffix: optional title suffix
         max_neg_log10p: cap -log10(p) at this value (default 20)
@@ -1149,18 +1294,18 @@ def plot_volcano_comparison(combined_df, save_path, title_suffix='', max_neg_log
 
             # Label points
             for _, row in gdf.iterrows():
-                label = row.get('target_gene', row.get('guide_name', ''))
+                label = row.get('guide_name', row.get('target_gene', ''))
                 ax.annotate(label, (row['log2FC'], row['neg_log10p']),
                             fontsize=6, alpha=0.7, ha='center', va='bottom',
                             color=style['color'])
 
-        # Connect the same gene across groups with faint lines
-        genes_in_data = sample_df['target_gene'].unique()
-        for gene in genes_in_data:
-            gene_rows = sample_df[sample_df['target_gene'] == gene]
-            if len(gene_rows) > 1:
-                xs = gene_rows['log2FC'].values
-                ys = gene_rows['neg_log10p'].values
+        # Connect the same guide across groups with faint lines
+        guides_in_data = sample_df['guide_name'].unique()
+        for guide in guides_in_data:
+            guide_rows = sample_df[sample_df['guide_name'] == guide]
+            if len(guide_rows) > 1:
+                xs = guide_rows['log2FC'].values
+                ys = guide_rows['neg_log10p'].values
                 ax.plot(xs, ys, color='grey', alpha=0.2, linewidth=0.8, zorder=1)
 
         ax.axhline(-np.log10(0.05), ls='--', color='grey', alpha=0.5, label='p=0.05')
@@ -1644,93 +1789,7 @@ def compute_custom_combo_de(adata, cell_df, target_combos, readout_genes,
     return gene_df, guide_df
 
 
-def plot_custom_combo_heatmap(result_df, save_path, title='Custom Combo KD',
-                              show=False):
-    """Plot heatmap: rows=readout genes, columns=target combos.
 
-    Args:
-        result_df: output from compute_custom_combo_de (gene- or guide-level)
-        save_path: path to save figure
-        title: plot title
-        show: if True, call plt.show() instead of plt.close()
-    """
-    if result_df.empty:
-        return
-
-    for sample in result_df['sample'].unique():
-        sdf = result_df[result_df['sample'] == sample]
-
-        pivot_fc = sdf.pivot_table(
-            index='readout_gene', columns='target_combo',
-            values='log2FC', aggfunc='first'
-        )
-        pivot_n = sdf.pivot_table(
-            index='readout_gene', columns='target_combo',
-            values='n_kd', aggfunc='first'
-        )
-        pivot_cpm = sdf.pivot_table(
-            index='readout_gene', columns='target_combo',
-            values='cpm_kd', aggfunc='first'
-        )
-        # Get ctrl CPM per readout gene (same across combos)
-        ctrl_cpm_map = sdf.groupby('readout_gene')['cpm_ctrl'].first()
-
-        if pivot_fc.empty:
-            continue
-
-        # Reindex just to ensure both axes exist. Sorting alphabetically is omitted
-        # because the Categorical type handles intrinsic order.
-        pivot_fc = pivot_fc.sort_index(axis=0).sort_index(axis=1)
-        pivot_n = pivot_n.reindex(pivot_fc.index, axis=0).reindex(pivot_fc.columns, axis=1)
-        pivot_cpm = pivot_cpm.reindex(pivot_fc.index, axis=0).reindex(pivot_fc.columns, axis=1)
-
-        n_rows, n_cols = pivot_fc.shape
-        fig, ax = plt.subplots(figsize=(max(5, n_cols * 2.0), max(3, n_rows * 1.2)))
-
-        im = ax.imshow(pivot_fc.values, aspect='auto', cmap='RdBu_r',
-                       vmin=-3, vmax=3)
-
-        # Y-axis: readout gene with ctrl CPM
-        y_labels = []
-        for gene in pivot_fc.index:
-            c_cpm = ctrl_cpm_map.get(gene, np.nan)
-            lbl = f"{gene}\n(Ctrl CPM={c_cpm:.1f})" if not np.isnan(c_cpm) else gene
-            y_labels.append(lbl)
-
-        ax.set_yticks(range(n_rows))
-        ax.set_yticklabels(y_labels, fontsize=10)
-        ax.set_xticks(range(n_cols))
-        ax.set_xticklabels(pivot_fc.columns, rotation=30, ha='right',
-                           rotation_mode='anchor', fontsize=10)
-        ax.set_title(f'{title} — {sample}', fontsize=13)
-        ax.set_xlabel('Target Combo')
-        ax.set_ylabel('Readout Gene')
-
-        cbar = plt.colorbar(im, ax=ax, shrink=0.7)
-        cbar.set_label('log₂FC vs ctrl_ctrl')
-
-        # Annotate
-        max_abs = np.nanmax(np.abs(pivot_fc.values)) if not np.all(np.isnan(pivot_fc.values)) else 1
-        for i in range(n_rows):
-            for j in range(n_cols):
-                val = pivot_fc.values[i, j]
-                n_c = pivot_n.values[i, j]
-                cpm_v = pivot_cpm.values[i, j]
-                if np.isnan(val):
-                    continue
-                color = 'white' if abs(val) > max_abs * 0.5 else 'black'
-                txt = f"lfc: {val:.2f}\ncpm: {cpm_v:.1f}\nn: {int(n_c)}"
-                ax.text(j, i, txt, ha='center', va='center', color=color, fontsize=8)
-
-        plt.tight_layout()
-        suffix = sample.lower().replace(' ', '_')
-        out_path = save_path.replace('.png', f'_{suffix}.png')
-        fig.savefig(out_path, dpi=150, bbox_inches='tight')
-        print(f"    Saved: {out_path}")
-        if show:
-            plt.show()
-        else:
-            plt.close(fig)
 
 # NOTE: estimate_background_noise has been moved to qc_q2_recombination.py
 # Import it from there if needed:
@@ -2050,6 +2109,78 @@ def main():
     print(f"\n{'='*60}")
     print(f"  QC Q3 Complete")
     print(f"{'='*60}")
+
+def summarize_singlet_counts(perfect_df, inferred_df=None, split_by='sample', valid_pairs=None, valid_combos=None):
+    """
+    Summarize the number of perfect singlet cells (and optionally perfect+inferred singlets)
+    per library construct (pair_id) and per holistic gene permutation.
+    
+    Args:
+        perfect_df: DataFrame containing strictly perfect singlets.
+        inferred_df: Optional DataFrame containing inferred singlets for combo-stats.
+        split_by: Column to split the analysis by (e.g. 'sample').
+        valid_pairs: Optional explicit pair_ids to capture 0-count drops.
+        valid_combos: Optional explicit gene-level combos to capture 0-count drops.
+    """
+    import pandas as pd
+    
+    combo_col = 'target_gene' if 'target_gene' in perfect_df.columns else 'target_combo'
+    
+    if inferred_df is not None and not inferred_df.empty:
+        combined_df = pd.concat([perfect_df, inferred_df], ignore_index=True)
+    else:
+        combined_df = perfect_df
+        
+    splits = [None] if not split_by else perfect_df[split_by].unique()
+    
+    res_list = []
+    
+    print(f"{'='*60}")
+    print(f"       Singlets Recovery Summary")
+    print(f"{'='*60}")
+    
+    for sp in splits:
+        sp_label = "All Samples" if sp is None else f"Sample {sp}"
+        print(f"\n[{sp_label}]")
+        
+        def compute_stats(df, include_inferred=False):
+            sub_df = df if sp is None else df[df[split_by] == sp]
+            
+            p_counts = sub_df['pair_id'].value_counts()
+            if valid_pairs is not None:
+                p_counts = p_counts.reindex(valid_pairs, fill_value=0)
+            p_desc = p_counts.describe()[['min', 'max', '50%', 'mean']]
+            
+            c_counts = sub_df[combo_col].value_counts()
+            if valid_combos is not None:
+                c_counts = c_counts.reindex(valid_combos, fill_value=0)
+            c_desc = c_counts.describe()[['min', 'max', '50%', 'mean']]
+            
+            prefix = "Perfect + Inferred" if include_inferred else "Perfect Singlets"
+            print(f"  {prefix} (Total: {len(sub_df):,})")
+            print(f"    - Per Construct ({len(p_counts):,} pairs) -> Mean: {p_desc['mean']:.1f} | Median: {p_desc['50%']:.1f} | Min: {p_desc['min']:.0f} | Max: {p_desc['max']:.0f}")
+            print(f"    - Per Combo     ({len(c_counts):,} genes) -> Mean: {c_desc['mean']:.1f} | Median: {c_desc['50%']:.1f} | Min: {c_desc['min']:.0f} | Max: {c_desc['max']:.0f}")
+            
+            res_list.append({
+                'split': sp,
+                'subset': prefix,
+                'total_cells': len(sub_df),
+                'pair_mean': p_desc['mean'], 'pair_median': p_desc['50%'], 
+                'pair_min': p_desc['min'], 'pair_max': p_desc['max'],
+                'combo_mean': c_desc['mean'], 'combo_median': c_desc['50%'], 
+                'combo_min': c_desc['min'], 'combo_max': c_desc['max'],
+            })
+            
+        compute_stats(perfect_df, include_inferred=False)
+        if inferred_df is not None and not inferred_df.empty:
+            compute_stats(combined_df, include_inferred=True)
+            
+    print(f"{'-'*60}\n")
+    
+    out_df = pd.DataFrame(res_list)
+    if split_by is None and 'split' in out_df.columns:
+        out_df = out_df.drop(columns=['split'])
+    return out_df
 
 
 if __name__ == "__main__":

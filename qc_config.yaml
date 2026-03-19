@@ -95,7 +95,8 @@ recombination:
   extended_model: true          # Fit extended model (r_swap, r12, r_del) vs simple (r)
   decoupling_rate: 0.0          # Fixed gRNA-iBAR decoupling rate (from Q1 guide-seq)
   run_threshold_sweep: true     # Run Part C UMI threshold sweep
-  umi_thresholds: [1, 2, 3, 4, 5, 8, 10]  # Thresholds to test
+  r12_ratio: 0.1              # Cross-pos swap rate can be hard coded as r12_ratio * r_swap, using reasonable biological prior
+  umi_thresholds: [2, 5, 8, 10]  # Thresholds to test
 
 # --- QC Processing ---
 qc_processing:

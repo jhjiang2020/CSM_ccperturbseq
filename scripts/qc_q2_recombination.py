@@ -258,11 +258,15 @@ def doublet_convolution(p_single):
         'unassigned': pu * pu,
     }
 
-def observable_probs(theta, moi, delta, extended=False, decoupling_rate=0.0, granular=False):
+def observable_probs(theta, moi, delta, extended=False, decoupling_rate=0.0, granular=False, r12_ratio=None):
     if granular:
-        return observable_probs_v2(theta, moi, delta)
+        return observable_probs_v2(theta, moi, delta, r12_ratio=r12_ratio)
     if extended:
-        d, s, r_swap, r12, r_del = theta
+        if r12_ratio is not None:
+            d, s, r_swap, r_del = theta
+            r12 = r_swap * r12_ratio
+        else:
+            d, s, r_swap, r12, r_del = theta
         P_C, P_I, P_M, P_X = per_construct_probs(d, s, r_swap, r12, r_del, c=decoupling_rate)
     else:
         d, s, r = theta
@@ -290,7 +294,7 @@ _V2_CATS = [
     'unassigned',
 ]
 
-def per_construct_probs_v2(d, s, r_swap, r12, r_del1, r_del2):
+def per_construct_probs_v2(d, s, r_swap1, r_swap2, r12, r_del1, r_del2):
     """Per-construct signal probabilities with position-specific deletion.
 
     Returns (P_C, P_I1, P_I2, P_M, P_X) — 5 construct-level signal types:
@@ -302,15 +306,15 @@ def per_construct_probs_v2(d, s, r_swap, r12, r_del1, r_del2):
     """
     q = 1.0 - s
     p = 1.0 - d
-    p_int = 1.0 - 2*r_swap - r12 - r_del1 - r_del2
+    p_int = 1.0 - r_swap1 - r_swap2 - r12 - r_del1 - r_del2
 
     P_C = q * p_int * p * p
     # P_I1: pos1 missing. Sources: intact+pos1_drop, any swap+pos1_drop, pos1_del
-    P_I1 = q * p * ((p_int + 2*r_swap + r12) * d + r_del1)
+    P_I1 = q * p * ((p_int + r_swap1 + r_swap2 + r12) * d + r_del1)
     # P_I2: pos2 missing. Sources: intact+pos2_drop, any swap+pos2_drop, pos2_del
-    P_I2 = q * p * ((p_int + 2*r_swap + r12) * d + r_del2)
+    P_I2 = q * p * ((p_int + r_swap1 + r_swap2 + r12) * d + r_del2)
     # P_M: both detected but from different pair_ids (swap/cross-swap)
-    P_M = q * (2*r_swap + r12) * p * p
+    P_M = q * (r_swap1 + r_swap2 + r12) * p * p
     P_X = 1.0 - P_C - P_I1 - P_I2 - P_M
 
     return P_C, P_I1, P_I2, P_M, P_X
@@ -404,16 +408,20 @@ def doublet_convolution_v2(p_single):
     }
 
 
-def observable_probs_v2(theta, moi, delta):
+def observable_probs_v2(theta, moi, delta, r12_ratio=None):
     """Observable probabilities for the 7-category granular model.
 
     Args:
-        theta: (d, s, r_swap, r12, r_del1, r_del2)
+        theta: (d, s, r_swap1, r_swap2, r12, r_del1, r_del2) or (d, s, r_swap1, r_swap2, r_del1, r_del2)
         moi: MOI (lambda)
         delta: doublet rate
     """
-    d, s, r_swap, r12, r_del1, r_del2 = theta
-    P_C, P_I1, P_I2, P_M, P_X = per_construct_probs_v2(d, s, r_swap, r12, r_del1, r_del2)
+    if r12_ratio is not None:
+        d, s, r_swap1, r_swap2, r_del1, r_del2 = theta
+        r12 = ((r_swap1 + r_swap2) / 2.0) * r12_ratio
+    else:
+        d, s, r_swap1, r_swap2, r12, r_del1, r_del2 = theta
+    P_C, P_I1, P_I2, P_M, P_X = per_construct_probs_v2(d, s, r_swap1, r_swap2, r12, r_del1, r_del2)
 
     p_single = cell_probs_single_v2(P_C, P_I1, P_I2, P_M, P_X, moi)
     p_doublet = doublet_convolution_v2(p_single)
@@ -423,10 +431,14 @@ def observable_probs_v2(theta, moi, delta):
         for cat in _V2_CATS
     }
 
-def neg_log_likelihood(theta, counts, moi, delta, extended=False, decoupling_rate=0.0):
+def neg_log_likelihood(theta, counts, moi, delta, extended=False, decoupling_rate=0.0, r12_ratio=None):
     eps = 1e-10
     if extended:
-        d, s, r_swap, r12, r_del = theta
+        if r12_ratio is not None:
+            d, s, r_swap, r_del = theta
+            r12 = r_swap * r12_ratio
+        else:
+            d, s, r_swap, r12, r_del = theta
         if (d < eps or d > 1 - eps or s < eps or s > 1 - eps or
                 r_swap < 0 or r12 < 0 or r_del < 0 or
                 2*r_swap + r12 + 2*r_del > 1 - eps):
@@ -437,7 +449,7 @@ def neg_log_likelihood(theta, counts, moi, delta, extended=False, decoupling_rat
             return 1e20
 
     try:
-        probs = observable_probs(theta, moi, delta, extended, decoupling_rate=decoupling_rate)
+        probs = observable_probs(theta, moi, delta, extended, decoupling_rate=decoupling_rate, r12_ratio=r12_ratio)
     except Exception:
         return 1e20
 
@@ -481,14 +493,20 @@ def estimate_stepwise(counts, moi, delta):
 
     return d, s, r
 
-def fit_mle(counts, moi, delta, extended=False, decoupling_rate=0.0, verbose=True):
+def fit_mle(counts, moi, delta, extended=False, decoupling_rate=0.0, r12_ratio=None, verbose=True):
     d0, s0, r0 = estimate_stepwise(counts, moi, delta)
 
     if extended:
-        x0 = [d0, s0, r0/5, r0/5, r0/5]
-        bounds = [(0.001, 0.99), (0.001, 0.99),
-                  (0.0, 0.3), (0.0, 0.3), (0.0, 0.3)]
-        param_names = ['d', 's', 'r_swap', 'r12', 'r_del']
+        if r12_ratio is not None:
+            x0 = [d0, s0, r0/5, r0/5]
+            bounds = [(0.001, 0.99), (0.001, 0.99),
+                      (0.0, 0.3), (0.0, 0.3)]
+            param_names = ['d', 's', 'r_swap', 'r_del']
+        else:
+            x0 = [d0, s0, r0/5, r0/5, r0/5]
+            bounds = [(0.001, 0.99), (0.001, 0.99),
+                      (0.0, 0.3), (0.0, 0.3), (0.0, 0.3)]
+            param_names = ['d', 's', 'r_swap', 'r12', 'r_del']
     else:
         x0 = [d0, s0, r0]
         bounds = [(0.001, 0.99), (0.001, 0.99), (0.0, 0.5)]
@@ -497,21 +515,25 @@ def fit_mle(counts, moi, delta, extended=False, decoupling_rate=0.0, verbose=Tru
     result = minimize(
         neg_log_likelihood,
         x0,
-        args=(counts, moi, delta, extended, decoupling_rate),
+        args=(counts, moi, delta, extended, decoupling_rate, r12_ratio),
         method='L-BFGS-B',
         bounds=bounds,
         options={'maxiter': 1000, 'ftol': 1e-12}
     )
 
     theta_hat = result.x
-    probs_hat = observable_probs(theta_hat, moi, delta, extended, decoupling_rate=decoupling_rate)
+    probs_hat = observable_probs(theta_hat, moi, delta, extended, decoupling_rate=decoupling_rate, r12_ratio=r12_ratio)
+
+    params = dict(zip(param_names, theta_hat))
+    if extended and r12_ratio is not None:
+        params['r12'] = params['r_swap'] * r12_ratio
 
     if verbose:
         N = sum(counts.values())
         print(f"\n    MLE Results (extended={extended}):")
         print(f"    {'Parameter':<12} {'Estimate':>10}")
         print(f"    {'─'*24}")
-        for name, val in zip(param_names, theta_hat):
+        for name, val in params.items():
             print(f"    {name:<12} {val:>10.4f}")
         print(f"\n    NLL: {result.nll if hasattr(result, 'nll') else result.fun:.2f}")
         print(f"    Converged: {result.success}")
@@ -525,8 +547,8 @@ def fit_mle(counts, moi, delta, extended=False, decoupling_rate=0.0, verbose=Tru
             print(f"    {cat:<22} {obs:>10,} {exp_n:>10,.0f} {resid:>+10,.0f}")
 
     return {
-        'params': dict(zip(param_names, theta_hat)),
-        'param_names': param_names,
+        'params': params,
+        'param_names': list(params.keys()),
         'theta': theta_hat,
         'nll': result.fun,
         'success': result.success,
@@ -535,17 +557,21 @@ def fit_mle(counts, moi, delta, extended=False, decoupling_rate=0.0, verbose=Tru
     }
 
 
-def neg_log_likelihood_v2(theta, counts, moi, delta):
+def neg_log_likelihood_v2(theta, counts, moi, delta, r12_ratio=None):
     """Negative log-likelihood for the 7-category granular model."""
     eps = 1e-10
-    d, s, r_swap, r12, r_del1, r_del2 = theta
+    if r12_ratio is not None:
+        d, s, r_swap1, r_swap2, r_del1, r_del2 = theta
+        r12 = ((r_swap1 + r_swap2) / 2.0) * r12_ratio
+    else:
+        d, s, r_swap1, r_swap2, r12, r_del1, r_del2 = theta
     if (d < eps or d > 1 - eps or s < eps or s > 1 - eps or
-            r_swap < 0 or r12 < 0 or r_del1 < 0 or r_del2 < 0 or
-            2*r_swap + r12 + r_del1 + r_del2 > 1 - eps):
+            r_swap1 < 0 or r_swap2 < 0 or r12 < 0 or r_del1 < 0 or r_del2 < 0 or
+            (r_swap1 + r_swap2 + r12 + r_del1 + r_del2) > 1 - eps):
         return 1e20
 
     try:
-        probs = observable_probs_v2(theta, moi, delta)
+        probs = observable_probs_v2(theta, moi, delta, r12_ratio=r12_ratio)
     except Exception:
         return 1e20
 
@@ -610,42 +636,60 @@ def estimate_stepwise_v2(counts, moi, delta):
     denom = max(N * p_k1 * q * p * p, 1)
     r_total = max(0.001, min(0.3, n_surplus / denom))
 
-    # Split r_total into r_swap and r12 (rough: r_swap=r_total/3, r12=r_total/3)
-    r_swap = max(0.001, r_total / 3.0)
+    # Split r_total into r_swap1, r_swap2, and r12 (rough: r_swap1=r_total/3, r_swap2=r_total/3, r12=r_total/3)
+    r_swap1 = max(0.001, r_total / 3.0)
+    r_swap2 = max(0.001, r_total / 3.0)
     r12 = max(0.001, r_total / 3.0)
 
-    return d, s, r_swap, r12, r_del1, r_del2
+    return d, s, r_swap1, r_swap2, r12, r_del1, r_del2
 
 
-def fit_mle_v2(counts, moi, delta, verbose=True):
+def fit_mle_v2(counts, moi, delta, r12_ratio=None, verbose=True):
     """Fit the 7-category granular model via MLE.
 
-    Parameters: d, s, r_swap, r12, r_del1, r_del2
+    Parameters: d, s, r_swap1, r_swap2, r12_ratio (optional), r_del1, r_del2
     """
-    d0, s0, r_swap0, r12_0, r_del1_0, r_del2_0 = estimate_stepwise_v2(counts, moi, delta)
+    d0, s0, r_swap1_0, r_swap2_0, r12_0, r_del1_0, r_del2_0 = estimate_stepwise_v2(counts, moi, delta)
 
-    x0 = [d0, s0, r_swap0, r12_0, r_del1_0, r_del2_0]
-    bounds = [
-        (0.001, 0.99),  # d
-        (0.001, 0.99),  # s
-        (0.0, 0.3),     # r_swap
-        (0.0, 0.3),     # r12
-        (0.0, 0.3),     # r_del1
-        (0.0, 0.3),     # r_del2
-    ]
-    param_names = ['d', 's', 'r_swap', 'r12', 'r_del1', 'r_del2']
+    if r12_ratio is not None:
+        x0 = [d0, s0, r_swap1_0, r_swap2_0, r_del1_0, r_del2_0]
+        bounds = [
+            (0.001, 0.99),  # d
+            (0.001, 0.99),  # s
+            (0.0, 0.3),     # r_swap1
+            (0.0, 0.3),     # r_swap2
+            (0.0, 0.3),     # r_del1
+            (0.0, 0.3),     # r_del2
+        ]
+        param_names = ['d', 's', 'r_swap1', 'r_swap2', 'r_del1', 'r_del2']
+    else:
+        x0 = [d0, s0, r_swap1_0, r_swap2_0, r12_0, r_del1_0, r_del2_0]
+        bounds = [
+            (0.001, 0.99),  # d
+            (0.001, 0.99),  # s
+            (0.0, 0.3),     # r_swap1
+            (0.0, 0.3),     # r_swap2
+            (0.0, 0.3),     # r12
+            (0.0, 0.3),     # r_del1
+            (0.0, 0.3),     # r_del2
+        ]
+        param_names = ['d', 's', 'r_swap1', 'r_swap2', 'r12', 'r_del1', 'r_del2']
 
     result = minimize(
         neg_log_likelihood_v2,
         x0,
-        args=(counts, moi, delta),
+        args=(counts, moi, delta, r12_ratio),
         method='L-BFGS-B',
         bounds=bounds,
         options={'maxiter': 2000, 'ftol': 1e-12}
     )
 
     theta_hat = result.x
-    probs_hat = observable_probs_v2(theta_hat, moi, delta)
+    probs_hat = observable_probs_v2(theta_hat, moi, delta, r12_ratio=r12_ratio)
+
+    params = dict(zip(param_names, theta_hat))
+    if r12_ratio is not None:
+        params['r12'] = ((params['r_swap1'] + params['r_swap2']) / 2.0) * r12_ratio
 
     # Compute BIC for model comparison
     n_params = len(param_names)
@@ -656,7 +700,7 @@ def fit_mle_v2(counts, moi, delta, verbose=True):
         print(f"\n    MLE Results (granular, 7-category):")
         print(f"    {'Parameter':<12} {'Estimate':>10}")
         print(f"    {'─'*24}")
-        for name, val in zip(param_names, theta_hat):
+        for name, val in params.items():
             print(f"    {name:<12} {val:>10.4f}")
         print(f"\n    NLL: {result.fun:.2f}  BIC: {bic:.2f}")
         print(f"    Converged: {result.success}")
@@ -670,8 +714,8 @@ def fit_mle_v2(counts, moi, delta, verbose=True):
             print(f"    {cat:<32} {obs:>10,} {exp_n:>10,.0f} {resid:>+10,.0f}")
 
     return {
-        'params': dict(zip(param_names, theta_hat)),
-        'param_names': param_names,
+        'params': params,
+        'param_names': list(params.keys()),
         'theta': theta_hat,
         'nll': result.fun,
         'bic': bic,
@@ -754,9 +798,14 @@ def count_model_categories(assignment_df, valid_bcs=None, granular=False):
         n_mc = n_mi = n_mm = 0
 
     return {
-    'multiplet_mixed': n_mm,
-    'unassigned': n_unassigned,
-}
+        'perfect_singlet': n_perfect,
+        'inferred_singlet_pos1_missing': n_inf_pos1,
+        'inferred_singlet_pos2_missing': n_inf_pos2,
+        'multiplet_all_complete': n_mc,
+        'multiplet_all_inferred': n_mi,
+        'multiplet_mixed': n_mm,
+        'unassigned': n_unassigned,
+    }
 
 def analyze_grna_ibar_pairing(umi_counts_path, ref_df, out_dir, valid_bcs=None, umi_thresholds=None, save_decoupled=True, return_df=True):
     """Estimate gRNA-iBAR decoupling rate with subcategories across UMI thresholds.
@@ -957,30 +1006,45 @@ def analyze_grna_ibar_pairing(umi_counts_path, ref_df, out_dir, valid_bcs=None, 
     return ret
 
 def plot_decoupling_vs_umi_threshold(summary_df, save_path=None):
-    """Plot cell decoupling rate and total valid cells vs UMI threshold."""
+    """Plot UMI-level decoupling rate and subcategories, and total valid cells vs UMI threshold."""
     if 'umi_threshold' not in summary_df.columns:
         print("    WARNING: 'umi_threshold' column missing from summary.")
         return None
         
     fig, ax1 = plt.subplots(figsize=(8, 5))
     
-    color = 'tab:red'
     ax1.set_xlabel('Minimum UMI Threshold', fontsize=12)
-    ax1.set_ylabel('Cell Decoupling Rate', color=color, fontsize=12)
-    ax1.plot(summary_df['umi_threshold'], summary_df['cell_decoupling_rate'], 
-             color=color, marker='o', linewidth=2)
-    ax1.tick_params(axis='y', labelcolor=color)
+    ax1.set_ylabel('Decoupled UMIs (%)', fontsize=12)
+    
+    # Calculate percentages for subcategories
+    pct_wt = (summary_df['wrong_target'] / summary_df['total'] * 100).fillna(0)
+    pct_im = (summary_df['ibar_missing'] / summary_df['total'] * 100).fillna(0)
+    pct_ni = (summary_df['novel_ibar'] / summary_df['total'] * 100).fillna(0)
+    
+    # Plot total and subcategories
+    x = summary_df['umi_threshold']
+    ax1.plot(x, summary_df['pct_decoupled'], color='black', marker='o', linewidth=2.5, label='Total Decoupled')
+    ax1.plot(x, pct_wt, color='tab:red', marker='v', linestyle='--', linewidth=1.5, label='Wrong Target')
+    ax1.plot(x, pct_im, color='tab:orange', marker='s', linestyle='--', linewidth=1.5, label='iBAR Missing')
+    ax1.plot(x, pct_ni, color='tab:purple', marker='X', linestyle='--', linewidth=1.5, label='Novel iBAR')
+    
     ax1.grid(True, linestyle='--', alpha=0.6)
     
     # Second y-axis for total cells remaining
     ax2 = ax1.twinx()  
     color2 = 'tab:blue'
-    ax2.set_ylabel('Total Valid Cells (Log10)', color=color2, fontsize=12)  
-    ax2.plot(summary_df['umi_threshold'], np.log10(np.maximum(summary_df['n_cells'], 1)), 
-             color=color2, marker='s', linestyle=':', linewidth=2)
+    ax2.set_ylabel('Total Valid Cells', color=color2, fontsize=12)  
+    ax2.plot(x, summary_df['n_cells'], 
+             color=color2, marker='D', linestyle=':', linewidth=2, label='Valid Cells')
+    ax2.set_yscale('log')
     ax2.tick_params(axis='y', labelcolor=color2)
     
-    plt.title('Decoupling Rate vs Minimum UMI Threshold', fontsize=14)
+    # Combine legends from both axes
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc='center right')
+    
+    plt.title('UMI Decoupling Rate vs Minimum UMI Threshold', fontsize=14)
     fig.tight_layout()  
     
     if save_path:
@@ -1044,9 +1108,9 @@ def plot_observed_vs_expected(res, save_path):
     print(f"    Saved: {save_path}")
 
 
-def run_recombination_model(adata, out_dir, moi=0.3, doublet_rate=0.03, extended=False, decoupling_rate=0.0, verbose=True, split_by_sample=False):
+def run_recombination_model(adata, out_dir, moi=0.3, doublet_rate=0.03, extended=False, decoupling_rate=0.0, r12_ratio=None, granular=True, verbose=True, split_by_sample=False):
     """Run the recombination MLE model on the dataset, optionally split by sample."""
-    print(f"\n  --- Part B.1: Recombination MLE Model (MOI={moi}, extended={extended}) ---")
+    print(f"\n  --- Part B.1: Recombination MLE Model (MOI={moi}, extended={extended}, granular={granular}) ---")
     valid_bcs = set(adata.obs.index)
     results = []
     
@@ -1056,9 +1120,12 @@ def run_recombination_model(adata, out_dir, moi=0.3, doublet_rate=0.03, extended
     assignment_df = pd.read_csv(assign_path)
     
     if not split_by_sample:
-        counts = count_model_categories(assignment_df, valid_bcs)
+        counts = count_model_categories(assignment_df, valid_bcs, granular=granular)
         try:
-            res = fit_mle(counts, moi, doublet_rate, extended=extended, decoupling_rate=decoupling_rate, verbose=verbose)
+            if granular:
+                res = fit_mle_v2(counts, moi, doublet_rate, r12_ratio=r12_ratio, verbose=verbose)
+            else:
+                res = fit_mle(counts, moi, doublet_rate, extended=extended, decoupling_rate=decoupling_rate, r12_ratio=r12_ratio, verbose=verbose)
             res['sample'] = 'All Cells'
             plot_observed_vs_expected(res, os.path.join(out_dir, 'q2_observed_vs_expected.png'))
             results.append(res)
@@ -1070,9 +1137,12 @@ def run_recombination_model(adata, out_dir, moi=0.3, doublet_rate=0.03, extended
             if verbose:
                 print(f"\n    Sample: {s}")
             sample_bcs = set(adata.obs[adata.obs['sample'] == s].index)
-            counts = count_model_categories(assignment_df, sample_bcs)
+            counts = count_model_categories(assignment_df, sample_bcs, granular=granular)
             try:
-                res = fit_mle(counts, moi, doublet_rate, extended=extended, decoupling_rate=decoupling_rate, verbose=verbose)
+                if granular:
+                    res = fit_mle_v2(counts, moi, doublet_rate, r12_ratio=r12_ratio, verbose=verbose)
+                else:
+                    res = fit_mle(counts, moi, doublet_rate, extended=extended, decoupling_rate=decoupling_rate, r12_ratio=r12_ratio, verbose=verbose)
                 res['sample'] = str(s)
                 safe_s = str(s).replace('/', '_').replace(' ', '_')
                 plot_observed_vs_expected(res, os.path.join(out_dir, f'q2_observed_vs_expected_{safe_s}.png'))
@@ -1085,11 +1155,13 @@ def run_recombination_model(adata, out_dir, moi=0.3, doublet_rate=0.03, extended
         for r in results:
             row = {'sample': r['sample']}
             row.update(r['params'])
-            row['nll'] = r['nll']
-            row['success'] = r['success']
+            if 'nll' in r:
+                row['nll'] = r['nll']
+            if 'success' in r:
+                row['success'] = r['success']
             params_list.append(row)
             
-        pd.DataFrame(params_list).to_csv(os.path.join(out_dir, 'q2_recombination_params.csv'), index=False)
+        #pd.DataFrame(params_list).to_csv(os.path.join(out_dir, 'q2_recombination_params.csv'), index=False)
         
     return results
 
@@ -1121,9 +1193,10 @@ def sweep_umi_threshold(deduped_df, ref_df, valid_bcs, out_dir, cfg_recomb, thre
     delta = cfg_recomb.get('doublet_rate', 0.03)
     extended = cfg_recomb.get('extended_model', False)
     decoupling_rate = cfg_recomb.get('decoupling_rate', 0.0)
+    r12_ratio = cfg_recomb.get('r12_ratio', None)
     
     print(f"    Sweep thresholds: {thresholds}")
-    print(f"    Fixed params: MOI={moi}, delta={delta}, extended={extended}, c={decoupling_rate}")
+    print(f"    Fixed params: MOI={moi}, delta={delta}, extended={extended}, c={decoupling_rate}, r12_ratio={r12_ratio}")
     
     # Check iBAR column
     ibar_col = 'ibar_seq'
@@ -1147,7 +1220,7 @@ def sweep_umi_threshold(deduped_df, ref_df, valid_bcs, out_dir, cfg_recomb, thre
         
         # 3. Fit granular MLE
         try:
-            res = fit_mle_v2(counts, moi, delta, verbose=False)
+            res = fit_mle_v2(counts, moi, delta, r12_ratio=r12_ratio, verbose=False)
             row = {'threshold': t}
             row.update(res['params'])
             row.update({f'n_{c}': counts.get(c, 0) for c in _V2_CATS})
@@ -1244,17 +1317,18 @@ def main():
     doublet_rate = recomb_cfg.get('doublet_rate', 0.03)
     extended = recomb_cfg.get('extended_model', False)
     decoupling_rate = recomb_cfg.get('decoupling_rate', 0.0)
+    r12_ratio = recomb_cfg.get('r12_ratio', None)
     
     # --- Part B.1: Legacy 4-category model ---
     counts_legacy = count_model_categories(assignment_df, valid_bcs, granular=False)
     print("\n  --- Part B.1a: Legacy Recombination MLE (4-category) ---")
-    res_legacy = fit_mle(counts_legacy, moi, doublet_rate, extended=extended, decoupling_rate=decoupling_rate)
+    res_legacy = fit_mle(counts_legacy, moi, doublet_rate, extended=extended, decoupling_rate=decoupling_rate, r12_ratio=r12_ratio)
     plot_observed_vs_expected(res_legacy, os.path.join(out_dir, 'q2_observed_vs_expected_legacy.png'))
     
     # --- Part B.2: Granular 7-category model ---
     counts_gran = count_model_categories(assignment_df, valid_bcs, granular=True)
     print("\n  --- Part B.1b: Granular Recombination MLE (7-category) ---")
-    res_gran = fit_mle_v2(counts_gran, moi, doublet_rate)
+    res_gran = fit_mle_v2(counts_gran, moi, doublet_rate, r12_ratio=r12_ratio)
     res_gran['sample'] = 'All Cells'
     plot_observed_vs_expected(res_gran, os.path.join(out_dir, 'q2_observed_vs_expected_granular.png'))
     

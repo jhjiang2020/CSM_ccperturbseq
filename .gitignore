@@ -2,3 +2,4 @@
 fastq/
 output/
 ParseBiosciences-Pipeline.1.6.4/
+scripts/__pycache__/

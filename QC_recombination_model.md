@@ -213,9 +213,13 @@ P_obs(cat) = (1-δ) · P_single(cat) + δ · P_doublet(cat)
 
 **Total**: $N = \sum_{i=1}^7 n_i$.
 
+### Degrees of Freedom and Constraints
 Degrees of freedom: 7 categories - 1 constraint = 6. 
 Parameters: `d, s, r_swap, r12, r_del1, r_del2` = 6.
 Model is exactly identified.
+
+> [!TIP]
+> **r12_ratio Constraint**: Biological prior knowledge indicates that cross-position swap (`r12`) is relatively rare compared to single-position swap (`r_swap`). The model allows setting a hard-coded ratio `r12_ratio = r12 / r_swap`. When `r12_ratio` is provided, `r12` is no longer a free parameter. This reduces the number of parameters to 5 (`d, s, r_swap, r_del1, r_del2`), making the estimation more robust by leveraging prior knowledge.
 
 ---
 
