@@ -674,3 +674,48 @@ Key sections of [config.yaml](file:///medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq
 - **Graceful Multi-FASTQ Handling**: Added native support for processing multiple lane FASTQ files corresponding to a single sublibrary. Users can now provide a `gex_prefix` or `grna_prefix` that utilizes standard shell wildcard globbing (e.g., `library_S*_L00*` to match `L001`, `L002` lane files simultaneously). The pipeline locates matching files using the pattern `*{prefix}*_R1_*.fastq.gz`. To verify your pattern works, test it with: `find /path/to/fastq_dir -name "*<prefix>*_R1_*.fastq.gz"`. The pipeline aggregates all matched files seamlessly without overwriting outputs.
 - **Step 1a (split-pipe) Update**: Replaced `head -1` discovery. Step 1a now groups the full list of matched GEX `_R1_` and `_R2_` FASTQ files and passes them simultaneously into the `split-pipe` execution command.
 - **Step 2 (Barcode Extraction) Update**: Refactored the internal file loop. The script now establishes a single `.tsv.gz` writable stream per sublibrary and continuously appends the barcode extraction data across all matching gRNA FASTQ pairs, eliminating catastrophic overwrites.
+
+### v1.2 — Short Read Support (2026-03-20)
+
+> [!IMPORTANT]
+> This update applies only to **single-guide mode without iBAR** (`single_guide_mode: true`, `ibar_length: 0`). Dual-guide and iBAR-enabled pipelines are unaffected.
+
+**Problem**: In libraries with shorter sequencing reads (e.g., R1 ≈ 50–55bp), R1 may be too short to capture the full `TSO + gRNA + stem` structure. Previously, these reads were silently discarded by the fixed-length `ibar_end > len(r1_seq)` boundary check, even though the gRNA sequence itself may be fully or partially recoverable.
+
+**Fix — Four-scenario graceful degradation in `extract_grna_single_short()`:**
+
+| Scenario | Condition | Behavior |
+|---|---|---|
+| 1. Full stem | R1 ≥ TSO + gRNA + stem | Normal extraction; highest confidence |
+| 2. Partial stem | TSO + gRNA ≤ R1 < TSO + gRNA + stem | Partial stem boundary check with strict mismatch rules; shortest matching gRNA length preferred on ambiguity |
+| 3. Truncated gRNA | TSO < R1 < TSO + min(gRNA) | Rescue all bases after TSO; matched against truncated reference |
+| 4. Discard | No TSO or R1 ≤ TSO | Read discarded |
+
+**Partial stem mismatch rules:**
+- Partial stem ≤ 2bp: Exactly 0 mismatches allowed (overrides `fixed_seq_max_mismatches`)
+- Partial stem > 2bp: 1 mismatch allowed (if user config ≥ 1)
+- A one-time warning is printed if the applied thresholds differ from the user config
+
+**Truncated gRNA matching:**
+- The pipeline automatically samples the first 100,000 reads per library to detect all naturally-occurring gRNA lengths (no user input required)
+- Detected lengths are logged alongside the expected lengths from `config.yaml`
+- Pre-built `NeighborhoodMatcher` dictionaries are constructed for each detected truncated length during worker initialization, avoiding per-read computational overhead
+- Truncated references may collapse uniqueness — reads matching multiple references at the same distance are flagged as `grna_ambiguous`
+
+**New output columns** (single-guide short-read mode only):
+
+| Column | Type | Description |
+|---|---|---|
+| `stem_truncated` | bool | `True` if stem was partially or fully absent |
+| `grna_truncated` | bool | `True` if gRNA itself was truncated (Scenario 3) |
+| `observed_grna_length` | int | Actual extracted gRNA length |
+
+**New Step 3 stats:**
+
+| Stat | Description |
+|---|---|
+| `short_read_scenario_1/2/3` | Read counts per scenario |
+| `short_read_discarded` | Reads discarded (Scenario 4) |
+| `truncated_matcher_used` | Reads routed to a truncated matcher |
+| `grna_ambiguous_truncated` | Ambiguous matches caused by truncation |
+| `grna_no_matcher_for_length` | Reads with no pre-built matcher for their length |

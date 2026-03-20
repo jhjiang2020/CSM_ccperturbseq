@@ -464,6 +464,196 @@ def extract_grna_ibar(
     return None
 
 
+def extract_grna_single_short(
+    r1_seq, tso_seq, stem1, grna_lengths, anchor_max_mm=2, tso_max_dist=3,
+):
+    """Extract gRNA from R1 in single-guide no-iBAR mode with short-read support.
+
+    Handles four scenarios based on available read length after TSO:
+      Scenario 1: Full gRNA + full stem  → normal extraction (best confidence)
+      Scenario 2: Full gRNA + partial stem → partial-stem boundary check
+      Scenario 3: Truncated gRNA (no stem) → rescue whatever follows TSO
+      Scenario 4: No TSO or nothing after TSO → discard
+
+    Partial stem mismatch rules:
+      - partial_stem_len <= 2: 0 mismatches (strict, overrides user config)
+      - partial_stem_len > 2:  min(1, anchor_max_mm) mismatches
+
+    Returns:
+        dict with grna_seq, scenario, stem_truncated, grna_truncated, etc.
+        or None if extraction fails (Scenario 4).
+    """
+    r1_seq = r1_seq.upper() if r1_seq else ""
+    tso_seq = tso_seq.upper() if tso_seq else ""
+    stem1 = stem1.upper() if stem1 else ""
+
+    # Step 1: Find TSO
+    tso_end, tso_dist = find_tso(r1_seq, tso_seq, max_dist=tso_max_dist)
+    if tso_end < 0:
+        return None  # Scenario 4: no TSO
+
+    remaining = len(r1_seq) - tso_end
+    if remaining <= 0:
+        return None  # Scenario 4: nothing after TSO
+
+    stem_len = len(stem1)
+    min_grna_len = min(grna_lengths)
+    max_grna_len = max(grna_lengths)
+
+    # --- Scenario 1 & 2: Try each gRNA length (longest first) ---
+    # We attempt full-stem and partial-stem evaluation for each candidate length.
+    best_result = None
+    best_score = None  # (scenario, -partial_stem_len_or_full, stem_mm)
+
+    for grna_len in sorted(grna_lengths, reverse=True):
+        grna_end = tso_end + grna_len
+        if grna_end > len(r1_seq):
+            continue  # Not enough room for even this gRNA length
+
+        avail_after_grna = len(r1_seq) - grna_end
+
+        if avail_after_grna >= stem_len:
+            # --- Scenario 1: Full stem available ---
+            stem_observed = r1_seq[grna_end:grna_end + stem_len]
+            mm = hamming_distance(stem_observed, stem1, anchor_max_mm + 1)
+            if mm <= anchor_max_mm:
+                result = {
+                    'grna_seq': r1_seq[tso_end:grna_end],
+                    'ibar_seq': '',
+                    'variant': 1,
+                    'grna_length': grna_len,
+                    'tso_offset': tso_end - len(tso_seq),
+                    'tso_dist': tso_dist,
+                    'stem_mm': mm,
+                    'tracr_mm': 0,
+                    'anchor_combo': 'A',
+                    'scenario': 1,
+                    'stem_truncated': False,
+                    'grna_truncated': False,
+                    'partial_stem_len': stem_len,
+                }
+                # Scenario 1 with full stem is highest confidence; return immediately
+                return result
+
+        elif avail_after_grna > 0:
+            # --- Scenario 2: Partial stem available ---
+            partial_stem_len = avail_after_grna
+            stem_observed = r1_seq[grna_end:grna_end + partial_stem_len]
+            stem_expected = stem1[:partial_stem_len]
+
+            # Strict mismatch rules for partial stems
+            if partial_stem_len <= 2:
+                allowed_mm = 0
+            else:
+                allowed_mm = min(1, anchor_max_mm)
+
+            mm = hamming_distance(stem_observed, stem_expected, allowed_mm + 1)
+            if mm <= allowed_mm:
+                # Valid partial stem match — track as candidate
+                # Prefer: lower scenario number, then longer partial stem, then fewer mm
+                score = (2, -partial_stem_len, mm)
+                if best_score is None or score < best_score:
+                    best_score = score
+                    best_result = {
+                        'grna_seq': r1_seq[tso_end:grna_end],
+                        'ibar_seq': '',
+                        'variant': 1,
+                        'grna_length': grna_len,
+                        'tso_offset': tso_end - len(tso_seq),
+                        'tso_dist': tso_dist,
+                        'stem_mm': mm,
+                        'tracr_mm': 0,
+                        'anchor_combo': 'partial_stem',
+                        'scenario': 2,
+                        'stem_truncated': True,
+                        'grna_truncated': False,
+                        'partial_stem_len': partial_stem_len,
+                    }
+        else:
+            # avail_after_grna == 0: gRNA fills exactly to end of read
+            # This is a zero-partial-stem case; trivially matches 0mm
+            # but we need to resolve ambiguity: prefer shortest gRNA length
+            score = (2, 0, 0)  # partial_stem_len=0 is worst within scenario 2
+            if best_score is None or score < best_score:
+                best_score = score
+                best_result = {
+                    'grna_seq': r1_seq[tso_end:grna_end],
+                    'ibar_seq': '',
+                    'variant': 1,
+                    'grna_length': grna_len,
+                    'tso_offset': tso_end - len(tso_seq),
+                    'tso_dist': tso_dist,
+                    'stem_mm': 0,
+                    'tracr_mm': 0,
+                    'anchor_combo': 'no_anchor',
+                    'scenario': 2,
+                    'stem_truncated': True,
+                    'grna_truncated': False,
+                    'partial_stem_len': 0,
+                }
+
+    if best_result is not None:
+        return best_result
+
+    # --- Scenario 3: Truncated gRNA (remaining < min gRNA length) ---
+    if remaining > 0:
+        grna_seq = r1_seq[tso_end:]
+        return {
+            'grna_seq': grna_seq,
+            'ibar_seq': '',
+            'variant': 1,
+            'grna_length': len(grna_seq),
+            'tso_offset': tso_end - len(tso_seq),
+            'tso_dist': tso_dist,
+            'stem_mm': -1,
+            'tracr_mm': -1,
+            'anchor_combo': 'truncated',
+            'scenario': 3,
+            'stem_truncated': True,
+            'grna_truncated': True,
+            'partial_stem_len': 0,
+        }
+
+    return None  # Should not reach here, but defensive
+
+
+# ---------------------------------------------------------------------------
+# Short-read sampling: detect truncated gRNA lengths from first N reads
+# ---------------------------------------------------------------------------
+
+def sample_truncated_lengths(barcode_tsv_path, tso_seq, stem1, grna_lengths,
+                             anchor_max_mm=2, tso_max_dist=3,
+                             n_sample=100_000):
+    """Sample first N reads to detect all naturally-occurring gRNA lengths.
+
+    Used in single-guide no-iBAR mode to pre-build truncated matchers.
+    Returns a sorted list of observed gRNA lengths (including truncated).
+    """
+    observed_lengths = Counter()
+    scenario_counts = Counter()
+    n_read = 0
+
+    for chunk_df in pd.read_csv(barcode_tsv_path, sep='\t', chunksize=10_000):
+        for r1_seq in chunk_df['r1_seq'].values:
+            result = extract_grna_single_short(
+                r1_seq, tso_seq, stem1, grna_lengths,
+                anchor_max_mm, tso_max_dist,
+            )
+            if result is not None:
+                observed_lengths[result['grna_length']] += 1
+                scenario_counts[result['scenario']] += 1
+            else:
+                scenario_counts['discard'] += 1
+
+            n_read += 1
+            if n_read >= n_sample:
+                break
+        if n_read >= n_sample:
+            break
+
+    return sorted(observed_lengths.keys()), dict(observed_lengths), dict(scenario_counts)
+
+
 # ---------------------------------------------------------------------------
 # Chunk processing for multiprocessing
 # ---------------------------------------------------------------------------
@@ -518,6 +708,7 @@ def _init_worker(config_dict):
     _worker_state['grna_name_to_position'] = config_dict['grna_name_to_position']
     _worker_state['single_guide_mode'] = config_dict.get('single_guide_mode', False)
     _worker_state['seq_id_to_names'] = config_dict['seq_id_to_names']
+    _worker_state['short_read_mode'] = config_dict.get('short_read_mode', False)
 
     # Build matchers ONCE per worker
     _worker_state['grna_matcher'] = NeighborhoodMatcher(
@@ -531,6 +722,24 @@ def _init_worker(config_dict):
         )
     else:
         _worker_state['ibar_matcher'] = None
+
+    # Build truncated matchers for short-read single-guide mode
+    _worker_state['truncated_matchers'] = {}
+    if config_dict.get('short_read_mode', False):
+        truncated_lengths = config_dict.get('truncated_lengths', [])
+        grna_seqs_full = config_dict['grna_seqs']
+        grna_names_full = config_dict['grna_names']
+        max_lev = config_dict['max_lev_grna']
+
+        for L in truncated_lengths:
+            # Skip lengths that match a full gRNA length (already handled by primary matcher)
+            if L in config_dict['grna_lengths']:
+                continue
+            # Truncate references to length L
+            trunc_seqs = [seq[:L] for seq in grna_seqs_full]
+            _worker_state['truncated_matchers'][L] = NeighborhoodMatcher(
+                trunc_seqs, grna_names_full, max_dist=max_lev
+            )
 
 
 def _resolve_shared_grna(candidate_names, ibar_seq, variant, grna_to_ibars,
@@ -606,12 +815,103 @@ def _process_rows(rows):
     grna_name_to_position = ws['grna_name_to_position']
     single_guide_mode = ws['single_guide_mode']
     seq_id_to_names = ws['seq_id_to_names']
+    short_read_mode = ws.get('short_read_mode', False)
+    truncated_matchers = ws.get('truncated_matchers', {})
 
     stats = Counter()
     results = []
 
     for read_id, bc_wells, bc_bci, umi, r1_seq in rows:
         stats['total_reads'] += 1
+
+        # --- Short-read path: single-guide no-iBAR mode ---
+        if short_read_mode:
+            result = extract_grna_single_short(
+                r1_seq, tso_seq, stem1, grna_lengths,
+                anchor_max_mm, tso_max_dist,
+            )
+
+            if result is None:
+                stats['extraction_failed'] += 1
+                stats['short_read_discarded'] += 1
+                continue
+
+            stats['extracted'] += 1
+            scenario = result['scenario']
+            stats[f'short_read_scenario_{scenario}'] += 1
+
+            grna_seq = result['grna_seq']
+            grna_len = result['grna_length']
+            stem_truncated = result['stem_truncated']
+            grna_truncated = result['grna_truncated']
+            tso_offset = result['tso_offset']
+            stats[f'tso_offset_{tso_offset}'] += 1
+            anchor_combo = result.get('anchor_combo', '?')
+            stats[f'anchor_combo_{anchor_combo}'] += 1
+
+            # Select the appropriate matcher based on gRNA length
+            if grna_len in [len(s) for s in ws['grna_matcher'].seqs]:
+                # Full-length gRNA — use primary matcher
+                active_matcher = grna_matcher
+            elif grna_len in truncated_matchers:
+                # Truncated gRNA — use pre-built truncated matcher
+                active_matcher = truncated_matchers[grna_len]
+                stats['truncated_matcher_used'] += 1
+            else:
+                # No matcher for this length (extremely rare/short)
+                stats['grna_no_matcher_for_length'] += 1
+                continue
+
+            # Fuzzy match gRNA
+            grna_match_raw, grna_dist, grna_seq_unique = active_matcher.match(grna_seq)
+
+            if grna_match_raw is None:
+                if grna_dist is not None:
+                    stats['grna_ambiguous'] += 1
+                    if grna_truncated:
+                        stats['grna_ambiguous_truncated'] += 1
+                else:
+                    stats['grna_no_match'] += 1
+                continue
+
+            if isinstance(grna_match_raw, list):
+                # Truncated sequences lost uniqueness and collides with multiple full sequences
+                stats['grna_ambiguous'] += 1
+                if grna_truncated:
+                    stats['grna_ambiguous_truncated'] += 1
+                continue
+
+            # Map seq_id back to grna_names
+            candidate_names = seq_id_to_names[grna_match_raw]
+            if len(candidate_names) == 1:
+                grna_name = candidate_names[0]
+            else:
+                # In single-guide mode, shared gRNA seqs are ambiguous
+                stats['grna_ambiguous'] += 1
+                continue
+
+            target_gene = ref_grna_to_target.get(grna_name)
+            if target_gene is None:
+                stats['grna_name_not_in_ref'] += 1
+                continue
+
+            match_type = f"grna_only_d{grna_dist}"
+            if grna_truncated:
+                match_type = f"grna_truncated_d{grna_dist}"
+            elif stem_truncated:
+                match_type = f"grna_partial_stem_d{grna_dist}"
+            stats['grna_only_match'] += 1
+
+            results.append((
+                read_id, bc_wells, bc_bci, umi, grna_name, grna_seq,
+                '', target_gene, grna_dist, -1, match_type,
+                1, grna_len, '', '',
+                '', False,
+                stem_truncated, grna_truncated, grna_len,
+            ))
+            continue
+
+        # --- Standard path (dual-guide or single-guide with full reads) ---
 
         # Extract gRNA + iBAR (includes TSO finding + combined stem+tracr scoring)
         result = extract_grna_ibar(
@@ -820,6 +1120,11 @@ OUTPUT_COLS = [
     'ibar_seq_corrected', 'ibar_decoupled',
 ]
 
+# Extended columns for single-guide short-read mode
+OUTPUT_COLS_SHORT = OUTPUT_COLS + [
+    'stem_truncated', 'grna_truncated', 'observed_grna_length',
+]
+
 
 def process_library(barcode_tsv_path, output_path, config_dict, n_processes=1,
                     chunk_size=100_000):
@@ -839,6 +1144,8 @@ def process_library(barcode_tsv_path, output_path, config_dict, n_processes=1,
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     n_results_total = 0
+    short_read_mode = config_dict.get('short_read_mode', False)
+    output_cols = OUTPUT_COLS_SHORT if short_read_mode else OUTPUT_COLS
 
     # Helper to open output file (gzip or plain)
     import gzip as _gzip
@@ -853,7 +1160,7 @@ def process_library(barcode_tsv_path, output_path, config_dict, n_processes=1,
         _init_worker(config_dict)
 
         with _open_out() as fout:
-            fout.write('\t'.join(OUTPUT_COLS) + '\n')
+            fout.write('\t'.join(output_cols) + '\n')
 
             for i, rows in enumerate(_chunk_generator(barcode_tsv_path, chunk_size)):
                 results, stats = _process_rows(rows)
@@ -878,7 +1185,7 @@ def process_library(barcode_tsv_path, output_path, config_dict, n_processes=1,
                     initargs=(config_dict,))
         fout = _open_out()
         try:
-            fout.write('\t'.join(OUTPUT_COLS) + '\n')
+            fout.write('\t'.join(output_cols) + '\n')
 
             chunks_done = 0
             chunk_iter = _chunk_generator(barcode_tsv_path, chunk_size)
@@ -957,6 +1264,24 @@ def main():
     print(f"  Max Levenshtein (gRNA): {gm['max_lev_dist']}")
     print(f"  Max Levenshtein (iBAR): {gm['max_lev_dist_ibar']}")
     print(f"  Processes: {n_processes}")
+
+    # Detect short-read mode: single-guide + no iBAR
+    short_read_mode = single_guide_mode and ibar_length == 0
+    if short_read_mode:
+        print(f"  ⚡ Short-read mode: ENABLED (single-guide, no iBAR)")
+        # One-time warning about partial stem mismatch overrides
+        stem_len = len(stem1)
+        effective_mm_short = 0 if stem_len <= 2 else min(1, anchor_max_mm)
+        if effective_mm_short != anchor_max_mm:
+            print(f"  ⚠ WARNING: Partial stem mismatch thresholds differ from config")
+            print(f"    Config fixed_seq_max_mismatches = {anchor_max_mm}")
+            print(f"    Partial stem ≤2bp: 0 mismatches allowed (overridden)")
+            if anchor_max_mm >= 1:
+                print(f"    Partial stem >2bp: 1 mismatch allowed")
+            else:
+                print(f"    Partial stem >2bp: 0 mismatches allowed")
+    else:
+        print(f"  Short-read mode: disabled")
     print()
 
     # Build lookups
@@ -1027,6 +1352,8 @@ def main():
         'grna_to_ibars': grna_to_ibars,
         'grna_name_to_position': grna_name_to_position,
         'single_guide_mode': single_guide_mode,
+        'short_read_mode': short_read_mode,
+        'truncated_lengths': [],  # populated per-library via sampling
     }
 
     libraries = cfg['libraries']
@@ -1050,6 +1377,32 @@ def main():
 
         output_path = os.path.join(output_dir, 'grna_matches', f"{lib_name}_grna_matches.tsv.gz")
         print(f"\n--- Library: {lib_name} ---")
+
+        # Run 100k-read sampling to detect truncated gRNA lengths (short-read mode)
+        if short_read_mode:
+            print(f"  Sampling first 100,000 reads to detect gRNA lengths...")
+            detected_lengths, length_counts, scenario_counts = sample_truncated_lengths(
+                barcode_tsv, tso_seq, stem1, grna_lengths,
+                anchor_max_mm, tso_max_dist, n_sample=100_000,
+            )
+            config_dict['truncated_lengths'] = detected_lengths
+
+            # Log detected vs expected lengths
+            print(f"    Expected gRNA lengths (config): {grna_lengths}")
+            print(f"    Detected gRNA lengths (sampled): {detected_lengths}")
+            print(f"    Length distribution:")
+            for L in sorted(length_counts.keys()):
+                label = f"{L}bp"
+                if L in grna_lengths:
+                    label += " (expected)"
+                elif L < min(grna_lengths):
+                    label += " (truncated)"
+                print(f"      {label}: {length_counts[L]:,} reads")
+            print(f"    Scenario distribution (sampled):")
+            for s in sorted(scenario_counts.keys(), key=str):
+                print(f"      Scenario {s}: {scenario_counts[s]:,}")
+            # Clear worker state so it rebuilds with new truncated_lengths
+            _worker_state.clear()
 
         stats = process_library(
             barcode_tsv, output_path, config_dict,
@@ -1078,6 +1431,23 @@ def main():
         if stats.get('ibar_decoupled', 0) > 0:
             print(f"    iBAR decoupled:     {stats.get('ibar_decoupled', 0):>12,}")
 
+        # Short-read mode specific stats
+        if short_read_mode:
+            print(f"    --- Short-read stats ---")
+            for s in [1, 2, 3]:
+                key = f'short_read_scenario_{s}'
+                count = stats.get(key, 0)
+                labels = {1: 'Full stem', 2: 'Partial stem', 3: 'Truncated gRNA'}
+                print(f"    Scenario {s} ({labels[s]}):{count:>8,}")
+            if stats.get('short_read_discarded', 0) > 0:
+                print(f"    Short-read discarded:{stats['short_read_discarded']:>8,}")
+            if stats.get('truncated_matcher_used', 0) > 0:
+                print(f"    Truncated matcher:  {stats['truncated_matcher_used']:>8,}")
+            if stats.get('grna_no_matcher_for_length', 0) > 0:
+                print(f"    No matcher (rare L):{stats['grna_no_matcher_for_length']:>8,}")
+            if stats.get('grna_ambiguous_truncated', 0) > 0:
+                print(f"    Ambiguous (trunc):  {stats['grna_ambiguous_truncated']:>8,}")
+
         # TSO offset distribution
         offsets = {k: v for k, v in stats.items() if k.startswith('tso_offset_')}
         if offsets:
@@ -1087,7 +1457,6 @@ def main():
                 count = offsets[key]
                 print(f"      offset {offset:>3s}bp: {count:>10,} "
                       f"({count/stats.get('extracted', 1)*100:.1f}%)")
-
     lib_label = args.library if getattr(args, 'library', None) else "all"
     stats_path = os.path.join(output_dir, 'grna_matches', f'{lib_label}_matching_stats.yaml')
     os.makedirs(os.path.dirname(stats_path), exist_ok=True)

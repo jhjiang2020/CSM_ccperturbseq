@@ -2110,30 +2110,55 @@ def main():
     print(f"  QC Q3 Complete")
     print(f"{'='*60}")
 
-def summarize_singlet_counts(perfect_df, inferred_df=None, split_by='sample', valid_pairs=None, valid_combos=None):
+def summarize_singlet_counts(adata_obs, split_by='sample', valid_pairs=None, valid_combos=None, include_recomb_multiplet=False, return_full_df=False, ref_df=None):
     """
-    Summarize the number of perfect singlet cells (and optionally perfect+inferred singlets)
-    per library construct (pair_id) and per holistic gene permutation.
+    Summarize the number of cells per library construct (pair_id) and per combination,
+    directly parsing an adata.obs dataframe containing cell-level doublet classifications.
     
     Args:
-        perfect_df: DataFrame containing strictly perfect singlets.
-        inferred_df: Optional DataFrame containing inferred singlets for combo-stats.
+        adata_obs: The full metadata DataFrame.
         split_by: Column to split the analysis by (e.g. 'sample').
         valid_pairs: Optional explicit pair_ids to capture 0-count drops.
         valid_combos: Optional explicit gene-level combos to capture 0-count drops.
+        include_recomb_multiplet: If True, evaluates scenario-1 physically recombined mismatched targets 
+                                  as viable combos, ignoring their structurally broken pair_ids.
+        return_full_df: If True, returns a tuple (summary_df, full_unpivoted_counts_df).
+        ref_df: Optional reference design dataframe. Automatically resolves expected pair_ids and target_combos.
     """
     import pandas as pd
+    import numpy as np
     
-    combo_col = 'target_gene' if 'target_gene' in perfect_df.columns else 'target_combo'
+    if ref_df is not None:
+        if valid_pairs is None and 'pair_id' in ref_df.columns:
+            valid_pairs = ref_df['pair_id'].dropna().unique()
+        if valid_combos is None and 'target_combo' in ref_df.columns:
+            valid_combos = ref_df['target_combo'].dropna().unique()
+            
+    # Check what the combo column is named naturally
+    combo_col = 'target_combo' if 'target_combo' in adata_obs.columns else 'target_gene'
     
-    if inferred_df is not None and not inferred_df.empty:
-        combined_df = pd.concat([perfect_df, inferred_df], ignore_index=True)
-    else:
-        combined_df = perfect_df
+    # Find natural subsets
+    perfect_df = adata_obs[(adata_obs['combo_type'] == 'singlet') & (adata_obs['detection_status'] == 'complete')].copy()
+    inferred_df = adata_obs[(adata_obs['combo_type'] == 'singlet') & (adata_obs['detection_status'] == 'inferred')].copy()
+    
+    perfect_df['combo_eval'] = perfect_df[combo_col]
+    inferred_df['combo_eval'] = inferred_df[combo_col]
+    
+    if include_recomb_multiplet:
+        m_mask = (adata_obs['combo_type'] == 'multiplet') & (adata_obs['detection_status'] == 'inferred')
+        m_mask &= (adata_obs['pos1_grna'] != 'unassigned') & (~adata_obs['pos1_grna'].str.contains(',', na=False))
+        m_mask &= (adata_obs['pos2_grna'] != 'unassigned') & (~adata_obs['pos2_grna'].str.contains(',', na=False))
+        recomb_df = adata_obs[m_mask].copy()
         
-    splits = [None] if not split_by else perfect_df[split_by].unique()
+        # Synthesize dynamically recombined combo metrics crossing pos1 and pos2 independently
+        recomb_df['combo_eval'] = recomb_df['pos1_target'].astype(str) + '_' + recomb_df['pos2_target'].astype(str)
+    else:
+        recomb_df = pd.DataFrame()
+        
+    splits = [None] if not split_by else adata_obs[split_by].dropna().unique()
     
     res_list = []
+    full_df_records = []
     
     print(f"{'='*60}")
     print(f"       Singlets Recovery Summary")
@@ -2143,43 +2168,75 @@ def summarize_singlet_counts(perfect_df, inferred_df=None, split_by='sample', va
         sp_label = "All Samples" if sp is None else f"Sample {sp}"
         print(f"\n[{sp_label}]")
         
-        def compute_stats(df, include_inferred=False):
+        def compute_stats(df, label):
             sub_df = df if sp is None else df[df[split_by] == sp]
             
             p_counts = sub_df['pair_id'].value_counts()
             if valid_pairs is not None:
                 p_counts = p_counts.reindex(valid_pairs, fill_value=0)
-            p_desc = p_counts.describe()[['min', 'max', '50%', 'mean']]
             
-            c_counts = sub_df[combo_col].value_counts()
+            p_desc = p_counts.describe()[['min', 'max', '50%', 'mean']] if len(p_counts) > 0 else pd.Series({'min':0, 'max':0, '50%':0, 'mean':0})
+            p_detected = (p_counts > 0).sum()
+            p_expected = len(valid_pairs) if valid_pairs is not None else len(p_counts)
+            
+            c_counts = sub_df['combo_eval'].value_counts()
             if valid_combos is not None:
                 c_counts = c_counts.reindex(valid_combos, fill_value=0)
-            c_desc = c_counts.describe()[['min', 'max', '50%', 'mean']]
+                
+            c_desc = c_counts.describe()[['min', 'max', '50%', 'mean']] if len(c_counts) > 0 else pd.Series({'min':0, 'max':0, '50%':0, 'mean':0})
+            c_detected = (c_counts > 0).sum()
+            c_expected = len(valid_combos) if valid_combos is not None else len(c_counts)
             
-            prefix = "Perfect + Inferred" if include_inferred else "Perfect Singlets"
-            print(f"  {prefix} (Total: {len(sub_df):,})")
-            print(f"    - Per Construct ({len(p_counts):,} pairs) -> Mean: {p_desc['mean']:.1f} | Median: {p_desc['50%']:.1f} | Min: {p_desc['min']:.0f} | Max: {p_desc['max']:.0f}")
-            print(f"    - Per Combo     ({len(c_counts):,} genes) -> Mean: {c_desc['mean']:.1f} | Median: {c_desc['50%']:.1f} | Min: {c_desc['min']:.0f} | Max: {c_desc['max']:.0f}")
+            print(f"  {label} (Total: {len(sub_df):,})")
+            print(f"    - Per Construct ({p_detected:,}/{p_expected:,} pairs) -> Mean: {p_desc['mean']:.1f} | Median: {p_desc['50%']:.1f} | Min: {p_desc['min']:.0f} | Max: {p_desc['max']:.0f}")
+            print(f"    - Per Combo     ({c_detected:,}/{c_expected:,} genes) -> Mean: {c_desc['mean']:.1f} | Median: {c_desc['50%']:.1f} | Min: {c_desc['min']:.0f} | Max: {c_desc['max']:.0f}")
+            
+            missing_pairs = p_counts[p_counts == 0].index.tolist()
+            missing_combos = c_counts[c_counts == 0].index.tolist()
+            if len(missing_pairs) > 0:
+                print(f"      [!] Missing Pairs ({len(missing_pairs)}): {', '.join(map(str, missing_pairs[:10]))}{' ...' if len(missing_pairs) > 10 else ''}")
+            if len(missing_combos) > 0:
+                print(f"      [!] Missing Combos ({len(missing_combos)}): {', '.join(map(str, missing_combos[:10]))}{' ...' if len(missing_combos) > 10 else ''}")
             
             res_list.append({
                 'split': sp,
-                'subset': prefix,
+                'subset': label,
                 'total_cells': len(sub_df),
+                'pairs_detected': p_detected, 'pairs_expected': p_expected,
                 'pair_mean': p_desc['mean'], 'pair_median': p_desc['50%'], 
                 'pair_min': p_desc['min'], 'pair_max': p_desc['max'],
+                'combos_detected': c_detected, 'combos_expected': c_expected,
                 'combo_mean': c_desc['mean'], 'combo_median': c_desc['50%'], 
                 'combo_min': c_desc['min'], 'combo_max': c_desc['max'],
             })
             
-        compute_stats(perfect_df, include_inferred=False)
-        if inferred_df is not None and not inferred_df.empty:
-            compute_stats(combined_df, include_inferred=True)
+            if return_full_df:
+                for k, v in p_counts.items():
+                    full_df_records.append({'split': sp, 'subset': label, 'category': 'pair_id', 'name': k, 'n_cells': v})
+                for k, v in c_counts.items():
+                    full_df_records.append({'split': sp, 'subset': label, 'category': 'target_combo', 'name': k, 'n_cells': v})
+        
+        compute_stats(perfect_df, "Perfect Singlets")
+        
+        combined_inf_df = pd.concat([perfect_df, inferred_df], ignore_index=True) if not inferred_df.empty else perfect_df
+        compute_stats(combined_inf_df, "Perfect + Inferred")
+            
+        if include_recomb_multiplet and not recomb_df.empty:
+            combined_recomb_df = pd.concat([combined_inf_df, recomb_df], ignore_index=True)
+            compute_stats(combined_recomb_df, "Perfect + Inferred + Recomb")
             
     print(f"{'-'*60}\n")
     
     out_df = pd.DataFrame(res_list)
     if split_by is None and 'split' in out_df.columns:
         out_df = out_df.drop(columns=['split'])
+        
+    if return_full_df:
+        full_df = pd.DataFrame(full_df_records)
+        if split_by is None and 'split' in full_df.columns:
+            full_df = full_df.drop(columns=['split'])
+        return out_df, full_df
+        
     return out_df
 
 
