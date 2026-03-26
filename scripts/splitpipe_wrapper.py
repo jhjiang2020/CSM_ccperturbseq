@@ -2,13 +2,29 @@ import sys
 import os
 import runpy
 
-# Determine the correct split-pipe directory based on the environment
-splitpipe_dir = "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/ParseBiosciences-Pipeline.1.6.4"
-if not os.path.exists(splitpipe_dir):
-    # Fallback for local testing (mounted drive)
-    splitpipe_dir = "/Volumes/Jiahao/TIMI/CSM_ccperturbseq/ParseBiosciences-Pipeline.1.6.4"
-    # Wait, the user mentioned we shouldn't rely on this conda env locally. We'll just set it.
-    
+# Intercept wrapper-specific arguments
+wrapper_config = None
+splitpipe_dir = None
+
+new_argv = [sys.argv[0]]
+i = 1
+while i < len(sys.argv):
+    arg = sys.argv[i]
+    if arg == '--wrapper_config':
+        wrapper_config = sys.argv[i+1]
+        i += 2
+    elif arg == '--wrapper_splitpipe_dir':
+        splitpipe_dir = sys.argv[i+1]
+        i += 2
+    else:
+        new_argv.append(arg)
+        i += 1
+sys.argv = new_argv
+
+if not splitpipe_dir or not wrapper_config:
+    print("ERROR: splitpipe_wrapper.py requires --wrapper_config and --wrapper_splitpipe_dir")
+    sys.exit(1)
+
 sys.path.insert(0, splitpipe_dir)
 
 import json
@@ -30,14 +46,10 @@ def patch_run_proc_defs(argv):
     except ValueError:
         pass
         
-    config_path = "/home/unix/jjiahao/main/TIMI/CSM_ccperturbseq/config.yaml"
-    if not os.path.exists(config_path):
-        config_path = "/Volumes/Jiahao/TIMI/CSM_ccperturbseq/config.yaml"
-        
-    if not os.path.exists(config_path) or not sublibs:
+    if not os.path.exists(wrapper_config) or not sublibs:
         return
         
-    with open(config_path, 'r') as f:
+    with open(wrapper_config, 'r') as f:
         cfg = yaml.safe_load(f)
         
     lib_map = {lib['sublibrary_name']: lib['sample_name'] for lib in cfg.get('libraries', [])}
@@ -126,6 +138,20 @@ if spsamp:
 
     # Apply monkeypatch
     spsamp.SpSamp.__init__ = patched_init
+
+    # Monkeypatch comb_max_sublibs limit
+    try:
+        from splitpipe import spclass
+        orig_get_par_val = spclass.SplitPipe.get_par_val
+
+        def patched_get_par_val(self, par, *args, **kwargs):
+            if par == "comb_max_sublibs":
+                return 1000
+            return orig_get_par_val(self, par, *args, **kwargs)
+
+        spclass.SplitPipe.get_par_val = patched_get_par_val
+    except ModuleNotFoundError:
+        print("WARNING: Could not import spclass for monkeypatching.")
 
 # Execute the original split-pipe but with the patched method in memory
 splitpipe_bin = os.path.join(splitpipe_dir, "split-pipe")

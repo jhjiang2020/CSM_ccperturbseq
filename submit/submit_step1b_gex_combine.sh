@@ -81,6 +81,8 @@ done
 
 # Execute the custom python wrapper that patches split-pipe's list-index bug at runtime
 python3 "${SCRIPTS_DIR}/splitpipe_wrapper.py" \
+    --wrapper_config "${CONFIG}" \
+    --wrapper_splitpipe_dir "${SPLITPIPE_DIR}" \
     --mode comb \
     --sublibraries ${SUBLIB_DIRS} \
     --output_dir "${COMB_OUT}" \
