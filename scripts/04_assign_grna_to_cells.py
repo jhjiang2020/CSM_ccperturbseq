@@ -285,26 +285,39 @@ def build_guide_umi_matrix(deduped_df, min_umi_threshold=0):
     Returns:
         sparse matrix, cell_barcodes list, guide_names list
     """
-    # Pivot to get cells × guides
-    pivot = deduped_df.pivot_table(
-        index='bc_wells',
-        columns='grna_name',
-        values='umi_count',
-        aggfunc='sum',
-        fill_value=0
-    )
+    # 1. First aggregate UMI counts for each cell-guide pair in long format
+    # This prevents duplicate pairs if present and acts as a safe base.
+    grouped_df = deduped_df.groupby(['bc_wells', 'grna_name'], as_index=False)['umi_count'].sum()
 
+    # 2. Apply UMI threshold directly to cell sums
     if min_umi_threshold > 0:
-        row_sums = pivot.sum(axis=1)
-        pivot = pivot[row_sums >= min_umi_threshold]
+        cell_totals = grouped_df.groupby('bc_wells')['umi_count'].sum()
+        valid_cells = cell_totals[cell_totals >= min_umi_threshold].index
+        grouped_df = grouped_df[grouped_df['bc_wells'].isin(valid_cells)]
 
-    cell_barcodes = list(pivot.index)
-    guide_names = list(pivot.columns)
-    matrix = sparse.csr_matrix(pivot.values)
+    # 3. Create categorical variables for mapping barcodes/guides to integer indices
+    bc_cat = pd.Categorical(grouped_df['bc_wells'])
+    grna_cat = pd.Categorical(grouped_df['grna_name'])
+
+    cell_barcodes = list(bc_cat.categories)
+    guide_names = list(grna_cat.categories)
+    
+    data_vals = grouped_df['umi_count'].values
+    row_ind = bc_cat.codes
+    col_ind = grna_cat.codes
+
+    # 4. Create the sparse matrix efficiently using COO format, then convert to CSR
+    matrix = sparse.coo_matrix(
+        (data_vals, (row_ind, col_ind)), 
+        shape=(len(cell_barcodes), len(guide_names))
+    ).tocsr()
 
     print(f"\n  Guide UMI matrix: {matrix.shape[0]:,} cells × {matrix.shape[1]:,} guides")
-    print(f"    Non-zero entries: {matrix.nnz:,}")
-    print(f"    Sparsity: {1 - matrix.nnz / (matrix.shape[0] * matrix.shape[1]):.4f}")
+    if matrix.shape[0] > 0 and matrix.shape[1] > 0:
+        print(f"    Non-zero entries: {matrix.nnz:,}")
+        print(f"    Sparsity: {1 - matrix.nnz / (matrix.shape[0] * matrix.shape[1]):.4f}")
+    else:
+        print("    Empty matrix.")
 
     return matrix, cell_barcodes, guide_names
 
