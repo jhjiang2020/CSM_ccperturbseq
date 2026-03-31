@@ -39,15 +39,17 @@ def _resolve_match_path(output_dir, lib_name):
 
 
 def stream_library_umi_dedup(match_path, lib_name, sample_name, sublib_index,
-                             group_cols, max_umi_edits=1,
+                             group_cols, max_umi_edits=1, min_reads_per_umi=1,
                              chunk_size=500_000):
     """Stream one library's match file and perform UMI dedup without loading all into memory.
 
     Reads the .tsv.gz in chunks, accumulates {group_key: {umi: read_count}},
-    then applies directional UMI collapsing.
+    optionally filters UMIs below min_reads_per_umi, then applies directional
+    UMI collapsing.
 
     Returns:
-        (deduped_df, lib_stats) where lib_stats has read/cell counts.
+        (deduped_df, lib_stats) where lib_stats has read/cell counts and
+        reads-per-UMI distribution data for QC plotting.
     """
     import time
     t0 = time.time()
@@ -97,18 +99,51 @@ def stream_library_umi_dedup(match_path, lib_name, sample_name, sublib_index,
     print(f"    {lib_name}: {total_reads:,} reads streamed in {elapsed:.1f}s, "
           f"{len(umi_accum):,} groups")
 
+    # --- Collect reads-per-UMI distribution (before filtering) ---
+    reads_per_umi_dist = Counter()  # {read_count_value: n_umis_with_that_count}
+    total_umis_raw = 0
+    for umi_counts in umi_accum.values():
+        for rc in umi_counts.values():
+            reads_per_umi_dist[rc] += 1
+            total_umis_raw += 1
+
+    # --- Filter UMIs below min_reads_per_umi ---
+    umis_filtered = 0
+    reads_filtered = 0
+    if min_reads_per_umi > 1:
+        for group_key in list(umi_accum.keys()):
+            before_count = len(umi_accum[group_key])
+            filtered = {u: c for u, c in umi_accum[group_key].items()
+                        if c >= min_reads_per_umi}
+            removed = before_count - len(filtered)
+            umis_filtered += removed
+            reads_filtered += sum(
+                c for c in umi_accum[group_key].values() if c < min_reads_per_umi
+            )
+            if filtered:
+                umi_accum[group_key] = Counter(filtered)
+            else:
+                del umi_accum[group_key]
+        print(f"    {lib_name}: min_reads_per_umi={min_reads_per_umi} "
+              f"→ {umis_filtered:,} UMIs removed ({reads_filtered:,} reads)")
+
     # Apply directional UMI collapsing on accumulated counts
     records = []
+    total_umis_after_filter = 0
+    total_umis_after_collapse = 0
     for group_key, umi_counts in umi_accum.items():
+        n_umis_pre = len(umi_counts)
+        total_umis_after_filter += n_umis_pre
         if max_umi_edits > 0:
             n_clusters = _directional_umi_collapse(dict(umi_counts),
                                                    max_edits=max_umi_edits)
         else:
             n_clusters = len(umi_counts)
+        total_umis_after_collapse += n_clusters
 
         row = dict(zip(group_cols, group_key))
         row['umi_count'] = n_clusters
-        row['umi_count_raw'] = len(umi_counts)
+        row['umi_count_raw'] = n_umis_pre
         row['read_count'] = sum(umi_counts.values())
         row['sublibrary'] = lib_name
         row['sample_name'] = sample_name
@@ -125,10 +160,24 @@ def stream_library_umi_dedup(match_path, lib_name, sample_name, sublib_index,
         'unique_guides': len(unique_guides),
         'groups': len(deduped),
         'elapsed_s': time.time() - t0,
+        'total_umis_raw': total_umis_raw,
+        'total_umis_after_filter': total_umis_after_filter,
+        'total_umis_after_collapse': total_umis_after_collapse,
+        'umis_filtered_low_reads': umis_filtered,
+        'reads_filtered_low_reads': reads_filtered,
+        'reads_per_umi_dist': dict(reads_per_umi_dist),
     }
 
+    # Compute sequencing saturation: 1 - unique_umis / total_reads
+    if total_reads > 0:
+        lib_stats['sequencing_saturation'] = round(
+            1.0 - total_umis_after_collapse / total_reads, 4
+        )
+    else:
+        lib_stats['sequencing_saturation'] = 0.0
+
     if max_umi_edits > 0 and len(deduped) > 0:
-        collapsed = deduped['umi_count_raw'].sum() - deduped['umi_count'].sum()
+        collapsed = total_umis_after_filter - total_umis_after_collapse
         lib_stats['umis_collapsed'] = int(collapsed)
         print(f"    {lib_name}: UMI collapsing done — {collapsed:,} UMIs collapsed")
 
@@ -518,6 +567,23 @@ def compute_qc_stats(lib_stats_all, deduped_df, assignment_df, guide_matrix,
     stats['median_umi_per_cell_guide'] = float(deduped_df['umi_count'].median())
     stats['mean_umi_per_cell_guide'] = float(deduped_df['umi_count'].mean())
 
+    # UMI filtering and saturation stats
+    total_umis_raw = sum(ls.get('total_umis_raw', 0) for ls in lib_stats_all.values())
+    total_umis_after_filter = sum(ls.get('total_umis_after_filter', 0) for ls in lib_stats_all.values())
+    total_umis_after_collapse = sum(ls.get('total_umis_after_collapse', 0) for ls in lib_stats_all.values())
+    umis_filtered = sum(ls.get('umis_filtered_low_reads', 0) for ls in lib_stats_all.values())
+    stats['total_umis_raw'] = int(total_umis_raw)
+    stats['total_umis_after_filter'] = int(total_umis_after_filter)
+    stats['total_umis_after_collapse'] = int(total_umis_after_collapse)
+    stats['umis_filtered_low_reads'] = int(umis_filtered)
+    stats['sequencing_saturation'] = round(
+        1.0 - total_umis_after_collapse / total_reads if total_reads > 0 else 0.0, 4
+    )
+    if 'read_count' in deduped_df.columns and len(deduped_df) > 0:
+        rpu = deduped_df['read_count'] / deduped_df['umi_count'].clip(lower=1)
+        stats['median_reads_per_umi'] = round(float(rpu.median()), 2)
+        stats['mean_reads_per_umi'] = round(float(rpu.mean()), 2)
+
     # After assignment
     stats['cells_with_assignment'] = assignment_df['bc_wells'].nunique()
     stats['assignments_total'] = len(assignment_df)
@@ -616,6 +682,331 @@ def plot_umi_threshold_sensitivity(deduped_df, save_path=None):
         print(f"\n  Saved UMI threshold sensitivity plot: {save_path}")
     plt.close(fig)
 
+
+def _compute_saturation_curve(lib_stats_all, min_reads_per_umi=1,
+                               n_points=10, n_reps=3):
+    """Compute sequencing saturation downsampling curve from accumulated data.
+
+    For each library and combined, estimate how many unique UMIs would be
+    detected at various fractions of the actual sequencing depth. Uses
+    Poisson approximation for speed.
+
+    Args:
+        lib_stats_all: dict of {lib_name: lib_stats} with reads_per_umi_dist
+        min_reads_per_umi: UMI validity threshold
+        n_points: Number of downsampling fractions
+        n_reps: Number of repetitions for averaging
+
+    Returns:
+        dict of {lib_name: list_of_dicts, 'combined': list_of_dicts}
+        Each dict: {fraction, reads_sampled, umis_detected, saturation}
+    """
+    rng = np.random.default_rng(42)
+    fractions = np.linspace(0.1, 1.0, n_points)
+    curve_data = {}
+
+    # Flatten all libraries' reads-per-UMI distributions into (read_count, n_umis) arrays
+    for lib_name, stats in lib_stats_all.items():
+        dist = stats.get('reads_per_umi_dist', {})
+        if not dist:
+            continue
+
+        total_reads = stats['total_reads']
+        # dist maps read_count -> n_umis_with_that_count
+        read_counts = np.array(list(dist.keys()), dtype=np.int64)
+        n_umis = np.array(list(dist.values()), dtype=np.int64)
+
+        lib_curve = []
+        for frac in fractions:
+            umis_detected_reps = []
+            for _ in range(n_reps):
+                # For each UMI with k reads, sample reads ~ Poisson(k * frac)
+                sampled_reads = rng.poisson(read_counts * frac)
+                # A UMI is detected if sampled_reads >= min_reads_per_umi
+                detected = np.sum(n_umis[sampled_reads >= min_reads_per_umi])
+                umis_detected_reps.append(int(detected))
+
+            avg_umis = int(np.mean(umis_detected_reps))
+            reads_sampled = int(total_reads * frac)
+            sat = 1.0 - avg_umis / reads_sampled if reads_sampled > 0 else 0.0
+
+            lib_curve.append({
+                'fraction': round(float(frac), 2),
+                'reads_sampled': reads_sampled,
+                'umis_detected': avg_umis,
+                'saturation': round(sat, 4),
+            })
+        curve_data[lib_name] = lib_curve
+
+    # Combined curve: merge all libraries' distributions
+    combined_dist = Counter()
+    combined_total_reads = 0
+    for stats in lib_stats_all.values():
+        for rc_str, count in stats.get('reads_per_umi_dist', {}).items():
+            combined_dist[int(rc_str)] += count
+        combined_total_reads += stats['total_reads']
+
+    if combined_dist:
+        read_counts = np.array(list(combined_dist.keys()), dtype=np.int64)
+        n_umis = np.array(list(combined_dist.values()), dtype=np.int64)
+
+        combined_curve = []
+        for frac in fractions:
+            umis_detected_reps = []
+            for _ in range(n_reps):
+                sampled_reads = rng.poisson(read_counts * frac)
+                detected = np.sum(n_umis[sampled_reads >= min_reads_per_umi])
+                umis_detected_reps.append(int(detected))
+
+            avg_umis = int(np.mean(umis_detected_reps))
+            reads_sampled = int(combined_total_reads * frac)
+            sat = 1.0 - avg_umis / reads_sampled if reads_sampled > 0 else 0.0
+
+            combined_curve.append({
+                'fraction': round(float(frac), 2),
+                'reads_sampled': reads_sampled,
+                'umis_detected': avg_umis,
+                'saturation': round(sat, 4),
+            })
+        curve_data['combined'] = combined_curve
+
+    return curve_data
+
+
+def plot_reads_per_umi_distribution(lib_stats_all, min_reads_per_umi=1,
+                                     save_path=None):
+    """Plot reads-per-UMI distribution: histogram and reverse CDF.
+
+    Left panel: Log-scale histogram with threshold line.
+    Right panel: Reverse CDF (fraction of UMIs with >= x reads).
+    """
+    # Merge all libraries' distributions
+    combined_dist = Counter()
+    per_lib_dists = {}
+    for lib_name, stats in lib_stats_all.items():
+        dist = stats.get('reads_per_umi_dist', {})
+        lib_dist = Counter()
+        for rc, count in dist.items():
+            combined_dist[int(rc)] += count
+            lib_dist[int(rc)] += count
+        per_lib_dists[lib_name] = lib_dist
+
+    if not combined_dist:
+        return
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+    # --- Left panel: Histogram ---
+    max_rc = max(combined_dist.keys())
+    bins = np.logspace(0, np.log10(max(max_rc, 2)), min(50, max_rc))
+
+    # Expand distribution into array of read counts for histogram
+    all_values = []
+    for rc, count in combined_dist.items():
+        all_values.extend([rc] * count)
+    all_values = np.array(all_values)
+
+    ax1.hist(all_values, bins=bins, color='#5B8DEF', edgecolor='white',
+             linewidth=0.2, alpha=0.8, label='All UMIs')
+
+    if min_reads_per_umi > 1:
+        ax1.axvline(min_reads_per_umi, color='#E74C3C', linewidth=2,
+                    linestyle='--', label=f'Threshold = {min_reads_per_umi}')
+        n_below = sum(c for rc, c in combined_dist.items() if rc < min_reads_per_umi)
+        n_total = sum(combined_dist.values())
+        pct_filtered = n_below / n_total * 100 if n_total > 0 else 0
+        ax1.fill_betweenx([0, ax1.get_ylim()[1] * 10],
+                          0.5, min_reads_per_umi,
+                          color='#E74C3C', alpha=0.1)
+        ax1.text(0.02, 0.95, f'{pct_filtered:.1f}% filtered',
+                 transform=ax1.transAxes, fontsize=10, color='#E74C3C',
+                 verticalalignment='top')
+
+    ax1.set_xscale('log')
+    ax1.set_yscale('log')
+    ax1.set_xlabel('Reads per UMI', fontsize=12)
+    ax1.set_ylabel('Number of UMIs', fontsize=12)
+    ax1.set_title('Reads-per-UMI Distribution', fontsize=13)
+    ax1.legend(fontsize=9)
+    ax1.grid(True, alpha=0.3)
+
+    # --- Right panel: Reverse CDF per library ---
+    for lib_name in sorted(per_lib_dists.keys()):
+        lib_dist = per_lib_dists[lib_name]
+        sorted_rcs = sorted(lib_dist.keys())
+        total = sum(lib_dist.values())
+        cumsum = 0
+        x_vals, y_vals = [], []
+        for rc in sorted_rcs:
+            x_vals.append(rc)
+            y_vals.append((total - cumsum) / total * 100)
+            cumsum += lib_dist[rc]
+        ax2.plot(x_vals, y_vals, marker='.', markersize=2, linewidth=1.5,
+                 label=lib_name)
+
+    # Combined line
+    sorted_rcs = sorted(combined_dist.keys())
+    total = sum(combined_dist.values())
+    cumsum = 0
+    x_vals, y_vals = [], []
+    for rc in sorted_rcs:
+        x_vals.append(rc)
+        y_vals.append((total - cumsum) / total * 100)
+        cumsum += combined_dist[rc]
+    ax2.plot(x_vals, y_vals, marker='s', markersize=3, linewidth=2.5,
+             color='black', linestyle='--', label='Combined')
+
+    if min_reads_per_umi > 1:
+        ax2.axvline(min_reads_per_umi, color='#E74C3C', linewidth=2,
+                    linestyle='--', alpha=0.7)
+
+    ax2.set_xscale('log')
+    ax2.set_xlabel('Min reads per UMI (x)', fontsize=12)
+    ax2.set_ylabel('% UMIs with \u2265 x reads', fontsize=12)
+    ax2.set_title('UMI Survival (Reverse CDF)', fontsize=13)
+    ax2.legend(fontsize=9, loc='upper right')
+    ax2.set_ylim(0, 105)
+    ax2.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"  Saved reads-per-UMI distribution plot: {save_path}")
+    plt.close(fig)
+
+
+def plot_saturation_curve(curve_data, save_path=None):
+    """Plot sequencing saturation downsampling curve.
+
+    Left panel: UMIs detected vs reads sampled (diminishing returns).
+    Right panel: Saturation % vs reads sampled.
+    """
+    if not curve_data:
+        return
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+    colors = plt.cm.Set2(np.linspace(0, 1, max(len(curve_data), 3)))
+    lib_names = [k for k in sorted(curve_data.keys()) if k != 'combined']
+
+    for i, lib_name in enumerate(lib_names):
+        points = curve_data[lib_name]
+        reads = [p['reads_sampled'] for p in points]
+        umis = [p['umis_detected'] for p in points]
+        sats = [p['saturation'] * 100 for p in points]
+
+        ax1.plot(reads, umis, marker='o', markersize=4, linewidth=1.5,
+                 color=colors[i], label=lib_name)
+        ax2.plot(reads, sats, marker='o', markersize=4, linewidth=1.5,
+                 color=colors[i], label=lib_name)
+
+    # Combined line
+    if 'combined' in curve_data:
+        points = curve_data['combined']
+        reads = [p['reads_sampled'] for p in points]
+        umis = [p['umis_detected'] for p in points]
+        sats = [p['saturation'] * 100 for p in points]
+
+        ax1.plot(reads, umis, marker='s', markersize=5, linewidth=2.5,
+                 color='black', linestyle='--', label='Combined')
+        ax2.plot(reads, sats, marker='s', markersize=5, linewidth=2.5,
+                 color='black', linestyle='--', label='Combined')
+
+        # Mark current depth
+        ax1.plot(reads[-1], umis[-1], '*', markersize=15, color='#E74C3C',
+                 zorder=5, label='Current depth')
+        ax2.plot(reads[-1], sats[-1], '*', markersize=15, color='#E74C3C',
+                 zorder=5)
+
+    # Left panel formatting
+    max_reads = max(p['reads_sampled'] for pts in curve_data.values() for p in pts)
+    ax1.plot([0, max_reads], [0, max_reads], 'k:', alpha=0.2, label='No saturation')
+    ax1.set_xlabel('Reads sampled', fontsize=12)
+    ax1.set_ylabel('Unique UMIs detected', fontsize=12)
+    ax1.set_title('Sequencing Depth vs UMI Discovery', fontsize=13)
+    ax1.legend(fontsize=8, loc='lower right')
+    ax1.grid(True, alpha=0.3)
+    ax1.ticklabel_format(style='sci', axis='both', scilimits=(0, 0))
+
+    # Right panel formatting
+    for pct, ls in [(50, ':'), (75, '--'), (90, '-.')]:
+        ax2.axhline(pct, color='gray', linewidth=0.8, linestyle=ls, alpha=0.5)
+        ax2.text(0.02, pct / 100 - 0.01, f'{pct}%', transform=ax2.get_yaxis_transform(),
+                 fontsize=8, color='gray')
+    ax2.set_xlabel('Reads sampled', fontsize=12)
+    ax2.set_ylabel('Sequencing Saturation (%)', fontsize=12)
+    ax2.set_title('Sequencing Saturation Curve', fontsize=13)
+    ax2.legend(fontsize=8, loc='lower right')
+    ax2.set_ylim(0, 105)
+    ax2.grid(True, alpha=0.3)
+    ax2.ticklabel_format(style='sci', axis='x', scilimits=(0, 0))
+
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"  Saved sequencing saturation curve: {save_path}")
+    plt.close(fig)
+
+
+def plot_median_reads_per_umi_per_cell(deduped_df, save_path=None):
+    """Plot distribution of median reads-per-UMI across cells, split by sublibrary.
+
+    Each cell's median reads-per-UMI is computed as median(read_count / umi_count)
+    across that cell's groups. Higher values indicate deeper per-cell sequencing.
+    """
+    if len(deduped_df) == 0 or 'read_count' not in deduped_df.columns:
+        return
+
+    # Compute reads-per-UMI ratio per group, then median per cell
+    df = deduped_df.copy()
+    df['reads_per_umi'] = df['read_count'] / df['umi_count'].clip(lower=1)
+
+    cell_medians = df.groupby(['bc_wells', 'sublibrary'])['reads_per_umi'].median().reset_index()
+
+    sublibraries = sorted(cell_medians['sublibrary'].unique())
+    n_libs = len(sublibraries)
+
+    fig, ax = plt.subplots(figsize=(max(6, n_libs * 1.5 + 2), 5))
+
+    # Violin plot
+    data_by_lib = [cell_medians[cell_medians['sublibrary'] == lib]['reads_per_umi'].values
+                   for lib in sublibraries]
+
+    parts = ax.violinplot(data_by_lib, positions=range(len(sublibraries)),
+                          showmedians=True, showextrema=False)
+
+    for pc in parts['bodies']:
+        pc.set_facecolor('#5B8DEF')
+        pc.set_alpha(0.6)
+    parts['cmedians'].set_color('#E74C3C')
+    parts['cmedians'].set_linewidth(2)
+
+    # Add quartile markers
+    for i, lib_data in enumerate(data_by_lib):
+        q25, q50, q75 = np.percentile(lib_data, [25, 50, 75])
+        ax.vlines(i, q25, q75, color='black', linewidth=3, alpha=0.5)
+        ax.text(i, q50, f' {q50:.1f}', fontsize=8, va='center', ha='left')
+
+    ax.set_xticks(range(len(sublibraries)))
+    ax.set_xticklabels(sublibraries, fontsize=11)
+    ax.set_xlabel('Sublibrary', fontsize=12)
+    ax.set_ylabel('Median reads per UMI (per cell)', fontsize=12)
+    ax.set_title('Per-Cell Sequencing Depth', fontsize=13)
+    ax.grid(True, axis='y', alpha=0.3)
+
+    # Overall median line
+    overall_median = cell_medians['reads_per_umi'].median()
+    ax.axhline(overall_median, color='#E74C3C', linewidth=1.5, linestyle='--',
+               alpha=0.7, label=f'Overall median = {overall_median:.1f}')
+    ax.legend(fontsize=9)
+
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"  Saved per-cell reads-per-UMI plot: {save_path}")
+    plt.close(fig)
+
+
 def _determine_group_cols(match_path, dedup_ibar):
     """Determine grouping columns by peeking at the header of a match file."""
     header_cols = pd.read_csv(match_path, sep='\t', nrows=0).columns.tolist()
@@ -631,13 +1022,14 @@ def _determine_group_cols(match_path, dedup_ibar):
         return ['bc_wells', 'grna_name', 'target_gene']
 
 
-def _process_one_library(task, group_cols, max_umi_edits):
+def _process_one_library(task, group_cols, max_umi_edits, min_reads_per_umi):
     """Module-level wrapper for multiprocessing (must be picklable)."""
     match_path, lib_name, sample_name, sublib_idx = task
     return stream_library_umi_dedup(
         match_path, lib_name, sample_name, sublib_idx,
         group_cols=group_cols,
-        max_umi_edits=max_umi_edits
+        max_umi_edits=max_umi_edits,
+        min_reads_per_umi=min_reads_per_umi
     )
 
 
@@ -655,6 +1047,8 @@ def main():
     ga = cfg['guide_assignment']
     dedup_ibar = ga.get('umi_dedup_ibar', True)
     max_umi_edits = ga.get('max_umi_edits', 1)
+    min_reads_per_umi = ga.get('min_reads_per_umi', 1)
+    compute_saturation = ga.get('compute_saturation_curve', True)
 
     # Auto-override: disable iBAR dedup when ibar_length == 0
     ibar_length = cfg.get('grna_structure', {}).get('ibar_length', 7)
@@ -664,10 +1058,12 @@ def main():
 
     print(f"\n{'='*60}")
     print(f"  Step 4: Cell-Level gRNA Assignment")
-    print(f"  iBAR length:            {ibar_length}")
+    print(f"  iBAR length:             {ibar_length}")
     print(f"  UMI dedup iBAR grouping: {dedup_ibar}")
-    print(f"  UMI max edits: {max_umi_edits}")
-    print(f"  Parallel CPUs: {args.ncpus}")
+    print(f"  UMI max edits:           {max_umi_edits}")
+    print(f"  Min reads per UMI:       {min_reads_per_umi}")
+    print(f"  Saturation curve:        {compute_saturation}")
+    print(f"  Parallel CPUs:           {args.ncpus}")
     print(f"{'='*60}")
 
     # Load reference table for design annotations
@@ -711,7 +1107,8 @@ def main():
         _worker = partial(
             _process_one_library,
             group_cols=group_cols,
-            max_umi_edits=max_umi_edits
+            max_umi_edits=max_umi_edits,
+            min_reads_per_umi=min_reads_per_umi
         )
         with Pool(min(args.ncpus, len(lib_tasks))) as pool:
             results = pool.map(_worker, lib_tasks)
@@ -723,7 +1120,8 @@ def main():
             deduped, stats = stream_library_umi_dedup(
                 match_path, lib_name, sample_name, sublib_idx,
                 group_cols=group_cols,
-                max_umi_edits=max_umi_edits
+                max_umi_edits=max_umi_edits,
+                min_reads_per_umi=min_reads_per_umi
             )
             all_deduped.append(deduped)
             lib_stats_all[lib_name] = stats
@@ -733,8 +1131,15 @@ def main():
     del all_deduped  # free memory
 
     total_reads = sum(s['total_reads'] for s in lib_stats_all.values())
+    total_umis_raw = sum(s.get('total_umis_raw', 0) for s in lib_stats_all.values())
+    total_umis_after = sum(s.get('total_umis_after_collapse', 0) for s in lib_stats_all.values())
+    overall_saturation = 1.0 - total_umis_after / total_reads if total_reads > 0 else 0.0
     print(f"\n  UMI dedup summary:")
     print(f"    Total reads streamed: {total_reads:>12,}")
+    print(f"    Total UMIs (raw):     {total_umis_raw:>12,}")
+    print(f"    UMIs after filter:    {sum(s.get('total_umis_after_filter', 0) for s in lib_stats_all.values()):>12,}")
+    print(f"    UMIs after collapse:  {total_umis_after:>12,}")
+    print(f"    Sequencing saturation:{overall_saturation:>11.1%}")
     print(f"    Unique groups:        {len(deduped_df):>12,}")
     print(f"    Unique cells:         {deduped_df['bc_wells'].nunique():>12,}")
     print(f"    Unique guides:        {deduped_df['grna_name'].nunique():>12,}")
@@ -841,11 +1246,43 @@ def main():
         save_path=os.path.join(assign_dir, 'umi_threshold_sensitivity.png')
     )
 
+    # 7. Reads-per-UMI distribution plot
+    plot_reads_per_umi_distribution(
+        lib_stats_all,
+        min_reads_per_umi=min_reads_per_umi,
+        save_path=os.path.join(assign_dir, 'reads_per_umi_distribution.png')
+    )
+
+    # 8. Per-cell reads-per-UMI violin plot
+    plot_median_reads_per_umi_per_cell(
+        deduped_df,
+        save_path=os.path.join(assign_dir, 'median_reads_per_umi_per_cell.png')
+    )
+
+    # 9. Sequencing saturation curve (optional, can be slow)
+    if compute_saturation:
+        print(f"\n  Computing sequencing saturation curve...")
+        curve_data = _compute_saturation_curve(
+            lib_stats_all,
+            min_reads_per_umi=min_reads_per_umi
+        )
+        plot_saturation_curve(
+            curve_data,
+            save_path=os.path.join(assign_dir, 'saturation_curve.png')
+        )
+        # Add curve data to QC stats
+        qc_stats['saturation_curve'] = {
+            lib: [{k: v for k, v in pt.items()} for pt in pts]
+            for lib, pts in curve_data.items()
+        }
+
     # Print QC summary
     print(f"\n  QC Summary:")
     print(f"    Total matched reads:    {qc_stats['total_matched_reads']:>12,}")
     print(f"    Unique cells with reads:{qc_stats['total_unique_cells_with_reads']:>12,}")
     print(f"    Cells with assignment:  {qc_stats['cells_with_assignment']:>12,}")
+    print(f"    Sequencing saturation:  {qc_stats.get('sequencing_saturation', 0):>11.1%}")
+    print(f"    Median reads/UMI:       {qc_stats.get('median_reads_per_umi', 0):>12.1f}")
     
     if dual_guide_counting_mode:
         print(f"    Mean pairs/cell:        {qc_stats.get('mean_pairs_per_cell', 0):>12.2f}")

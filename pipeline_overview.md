@@ -414,13 +414,16 @@ flowchart TD
         GRNA --> IBAR_W["5b. Within-guide<br>iBAR match"]
         IBAR_G --> RESOLVE["6. Resolve corrected iBAR<br>+ decoupling flag"]
         IBAR_W --> RESOLVE
+        ROWS -->|failed| FAIL["Record failure reason"]
     end
 
     RESOLVE --> OUT[("grna_matches/<br>sublib_1_grna_matches.tsv.gz<br>~17 columns per read")]
+    FAIL -->|save_failed_reads| FOUT[("grna_matches/<br>sublib_1_grna_failed.tsv.gz<br>read + failure_reason")]
 
     style BC fill:#e3f2fd
     style REF fill:#e3f2fd
     style OUT fill:#c8e6c9
+    style FOUT fill:#ffcdd2
 ```
 
 ### R1 Read Structure
@@ -470,7 +473,10 @@ flowchart TD
     subgraph Stream["Streaming UMI Dedup (per library, ×N parallel)"]
         MATCH[(".tsv.gz<br>match file")] --> CHUNKS["Read 500K-row<br>chunks"]
         CHUNKS --> ACCUM["Accumulate<br>{(cell, guide, ibar, target):<br>{umi: read_count}}"]
-        ACCUM --> COLLAPSE["Directional UMI<br>collapsing (Hamming ≤ 1)"]
+        ACCUM --> FILTER{"min_reads_per_umi<br>> 1?"}
+        FILTER -->|Yes| PRUNE["Remove UMIs with<br>reads < threshold"]
+        FILTER -->|No| COLLAPSE
+        PRUNE --> COLLAPSE["Directional UMI<br>collapsing (Hamming ≤ 1)"]
         COLLAPSE --> DEDUP[("Per-library<br>deduped DataFrame")]
     end
 
@@ -486,15 +492,19 @@ flowchart TD
     CONCAT --> OUT2[("grna_umi_counts.csv")]
     MATRIX --> OUT3[("grna_umi_matrix.mtx")]
     CONCAT --> OUT4[("umi_threshold_sensitivity.png")]
+    ACCUM --> OUT5[("reads_per_umi_distribution.png")]
+    ACCUM --> OUT6[("saturation_curve.png")]
+    CONCAT --> OUT7[("median_reads_per_umi_per_cell.png")]
 
     style C1 fill:#e3f2fd
     style C2 fill:#e3f2fd
-    style T1 fill:#e3f2fd
-    style T2 fill:#e3f2fd
     style OUT1 fill:#c8e6c9
     style OUT2 fill:#c8e6c9
     style OUT3 fill:#c8e6c9
     style OUT4 fill:#c8e6c9
+    style OUT5 fill:#fff9c4
+    style OUT6 fill:#fff9c4
+    style OUT7 fill:#fff9c4
 ```
 
 ### UMI Directional Collapsing Algorithm
@@ -593,8 +603,8 @@ Key sections of [config.yaml](file:///medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq
 | Section | Key Parameters |
 |---|---|
 | `grna_structure` | `fixed_seq_1` (TSO), `fixed_seq_2/3` (stems), `grna_lengths: [20, 21]`, `ibar_length: 7` |
-| `grna_matching` | `max_lev_dist: 3`, `max_lev_dist_ibar: 3` |
-| `guide_assignment` | `dual_guide_mode: true`, `min_umi_threshold: 5`, `umi_dedup_ibar: true`, `max_umi_edits: 1` |
+| `grna_matching` | `max_lev_dist: 3`, `max_lev_dist_ibar: 3`, `save_failed_reads: false` |
+| `guide_assignment` | `dual_guide_mode: true`, `min_umi_threshold: 5`, `umi_dedup_ibar: true`, `max_umi_edits: 1`, `min_reads_per_umi: 1`, `compute_saturation_curve: true` |
 | `barcode_extraction` | `bc_max_edit_dist: 1`, `n_processes: 8` |
 | `libraries` | 4 sublibraries: C1, C2, T1, T2 (2 Control + 2 Treatment) |
 
@@ -719,3 +729,17 @@ Key sections of [config.yaml](file:///medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq
 | `truncated_matcher_used` | Reads routed to a truncated matcher |
 | `grna_ambiguous_truncated` | Ambiguous matches caused by truncation |
 | `grna_no_matcher_for_length` | Reads with no pre-built matcher for their length |
+
+### v1.3 — Failed Read Recording & Sequencing Saturation QC (2026-03-31)
+
+**Step 3 — Save Failed Reads:**
+- Added `save_failed_reads` option under `grna_matching`. When enabled, reads that fail Step 3 matching are written to `grna_matches/<lib>_grna_failed.tsv.gz` with a `failure_reason` column. Default: `false`.
+
+**Step 4 — UMI Read-Depth Filtering & Saturation QC:**
+- Added `min_reads_per_umi` (default: `1`) under `guide_assignment`. Filters out UMIs supported by fewer reads than the threshold before directional collapsing — removes noise from singleton UMIs in deeply-sequenced libraries.
+- Added `compute_saturation_curve` (default: `true`). Computes a CellRanger-style sequencing saturation downsampling curve via Poisson approximation.
+- **New QC plots**:
+  - `reads_per_umi_distribution.png` — histogram + reverse CDF of reads-per-UMI, with threshold annotation.
+  - `saturation_curve.png` — UMI discovery & saturation % vs subsampled read depth, per-library + combined.
+  - `median_reads_per_umi_per_cell.png` — violin plot of per-cell sequencing depth by sublibrary.
+- **New QC stats** in `grna_qc_stats.yaml`: `sequencing_saturation`, `total_umis_raw`, `umis_filtered_low_reads`, `median_reads_per_umi`.

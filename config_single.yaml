@@ -185,6 +185,11 @@ grna_matching:
   max_lev_dist: 3
   # Maximum Levenshtein distance for iBAR matching (same logic as gRNA)
   max_lev_dist_ibar: 2
+  # Whether to separately save reads that fail Step 3 matching (extraction failure,
+  # ambiguous stems, no reference match, etc.) to a companion file alongside the
+  # main match output. Each failed read is recorded with the reason for failure.
+  # Output: grna_matches/<lib>_grna_failed.tsv.gz
+  save_failed_reads: false
 
 # --- Cell-Level gRNA Assignment ---
 guide_assignment:
@@ -219,6 +224,16 @@ guide_assignment:
   # Max Hamming distance for UMI error correction (directional method).
   # 0 = exact UMI counting (no correction). 1 = collapse UMIs within 1bp.
   max_umi_edits: 1
+  # Minimum number of reads required for a UMI to be considered valid.
+  # UMIs with fewer reads are discarded before directional collapsing.
+  # Set to 1 to keep all UMIs (default, backward-compatible).
+  # Set to 2+ to require read-level confirmation of each molecule.
+  min_reads_per_umi: 1
+  # Whether to compute the sequencing saturation downsampling curve.
+  # Subsamples reads at multiple depths to estimate how many additional
+  # UMIs would be recovered with more sequencing.
+  # Output: grna_assignment/saturation_curve.png
+  compute_saturation_curve: true
 
 # --- Barcode Extraction ---
 barcode_extraction:

@@ -709,6 +709,7 @@ def _init_worker(config_dict):
     _worker_state['single_guide_mode'] = config_dict.get('single_guide_mode', False)
     _worker_state['seq_id_to_names'] = config_dict['seq_id_to_names']
     _worker_state['short_read_mode'] = config_dict.get('short_read_mode', False)
+    _worker_state['save_failed_reads'] = config_dict.get('save_failed_reads', False)
 
     # Build matchers ONCE per worker
     _worker_state['grna_matcher'] = NeighborhoodMatcher(
@@ -794,7 +795,7 @@ def _process_rows(rows):
     """Process a list of (read_id, bc_wells, bc_bci, umi, r1_seq) tuples.
 
     Uses worker-local state initialized by _init_worker.
-    Returns (results_list, stats_counter).
+    Returns (results_list, discarded_list, stats_counter).
     """
     ws = _worker_state
     tso_seq = ws['tso_seq']
@@ -817,9 +818,11 @@ def _process_rows(rows):
     seq_id_to_names = ws['seq_id_to_names']
     short_read_mode = ws.get('short_read_mode', False)
     truncated_matchers = ws.get('truncated_matchers', {})
+    save_failed = ws.get('save_failed_reads', False)
 
     stats = Counter()
     results = []
+    discarded = []
 
     for read_id, bc_wells, bc_bci, umi, r1_seq in rows:
         stats['total_reads'] += 1
@@ -834,6 +837,8 @@ def _process_rows(rows):
             if result is None:
                 stats['extraction_failed'] += 1
                 stats['short_read_discarded'] += 1
+                if save_failed:
+                    discarded.append((read_id, bc_wells, bc_bci, umi, r1_seq, '', '', 'extraction_failed'))
                 continue
 
             stats['extracted'] += 1
@@ -860,6 +865,8 @@ def _process_rows(rows):
             else:
                 # No matcher for this length (extremely rare/short)
                 stats['grna_no_matcher_for_length'] += 1
+                if save_failed:
+                    discarded.append((read_id, bc_wells, bc_bci, umi, r1_seq, grna_seq, '', 'grna_no_matcher_for_length'))
                 continue
 
             # Fuzzy match gRNA
@@ -870,8 +877,12 @@ def _process_rows(rows):
                     stats['grna_ambiguous'] += 1
                     if grna_truncated:
                         stats['grna_ambiguous_truncated'] += 1
+                    if save_failed:
+                        discarded.append((read_id, bc_wells, bc_bci, umi, r1_seq, grna_seq, '', 'grna_ambiguous'))
                 else:
                     stats['grna_no_match'] += 1
+                    if save_failed:
+                        discarded.append((read_id, bc_wells, bc_bci, umi, r1_seq, grna_seq, '', 'grna_no_match'))
                 continue
 
             if isinstance(grna_match_raw, list):
@@ -879,6 +890,8 @@ def _process_rows(rows):
                 stats['grna_ambiguous'] += 1
                 if grna_truncated:
                     stats['grna_ambiguous_truncated'] += 1
+                if save_failed:
+                    discarded.append((read_id, bc_wells, bc_bci, umi, r1_seq, grna_seq, '', 'grna_ambiguous'))
                 continue
 
             # Map seq_id back to grna_names
@@ -888,11 +901,15 @@ def _process_rows(rows):
             else:
                 # In single-guide mode, shared gRNA seqs are ambiguous
                 stats['grna_ambiguous'] += 1
+                if save_failed:
+                    discarded.append((read_id, bc_wells, bc_bci, umi, r1_seq, grna_seq, '', 'grna_ambiguous_shared'))
                 continue
 
             target_gene = ref_grna_to_target.get(grna_name)
             if target_gene is None:
                 stats['grna_name_not_in_ref'] += 1
+                if save_failed:
+                    discarded.append((read_id, bc_wells, bc_bci, umi, r1_seq, grna_seq, '', 'grna_name_not_in_ref'))
                 continue
 
             match_type = f"grna_only_d{grna_dist}"
@@ -922,6 +939,8 @@ def _process_rows(rows):
 
         if result is None:
             stats['extraction_failed'] += 1
+            if save_failed:
+                discarded.append((read_id, bc_wells, bc_bci, umi, r1_seq, '', '', 'extraction_failed'))
             continue
 
         stats['extracted'] += 1
@@ -959,8 +978,12 @@ def _process_rows(rows):
         if grna_match_raw is None:
             if grna_dist is not None:
                 stats['grna_ambiguous'] += 1
+                if save_failed:
+                    discarded.append((read_id, bc_wells, bc_bci, umi, r1_seq, grna_seq, ibar_seq, 'grna_ambiguous'))
             else:
                 stats['grna_no_match'] += 1
+                if save_failed:
+                    discarded.append((read_id, bc_wells, bc_bci, umi, r1_seq, grna_seq, ibar_seq, 'grna_no_match'))
             continue
 
         # Map seq_id back to grna_names
@@ -976,6 +999,8 @@ def _process_rows(rows):
         if isinstance(grna_match_result, list):
             if single_guide_mode:
                 stats['grna_ambiguous'] += 1
+                if save_failed:
+                    discarded.append((read_id, bc_wells, bc_bci, umi, r1_seq, grna_seq, ibar_seq, 'grna_ambiguous_shared'))
                 continue
             
             # Multiple grna_names share this sequence — disambiguate (dual mode)
@@ -986,6 +1011,8 @@ def _process_rows(rows):
             )
             if grna_name is None:
                 stats['shared_grna_unresolved'] += 1
+                if save_failed:
+                    discarded.append((read_id, bc_wells, bc_bci, umi, r1_seq, grna_seq, ibar_seq, 'shared_grna_unresolved'))
                 continue
             stats[f'shared_grna_{resolution}_resolved'] += 1
             grna_unique = True  # Now resolved
@@ -997,6 +1024,8 @@ def _process_rows(rows):
         if not grna_unique:
             # Sequence-ambiguous (different seqs at same distance)
             stats['grna_ambiguous'] += 1
+            if save_failed:
+                discarded.append((read_id, bc_wells, bc_bci, umi, r1_seq, grna_seq, ibar_seq, 'grna_ambiguous_seq'))
             continue
 
         # 4. Fuzzy match iBAR — dual matching (global + within-guide)
@@ -1004,6 +1033,8 @@ def _process_rows(rows):
             target_gene = ref_grna_to_target.get(grna_name)
             if target_gene is None:
                 stats['grna_name_not_in_ref'] += 1
+                if save_failed:
+                    discarded.append((read_id, bc_wells, bc_bci, umi, r1_seq, grna_seq, '', 'grna_name_not_in_ref'))
                 continue
             
             match_type = f"grna_only_d{grna_dist}"
@@ -1020,6 +1051,8 @@ def _process_rows(rows):
         target_gene = ref_grna_to_target.get(grna_name)
         if target_gene is None:
             stats['grna_name_not_in_ref'] += 1
+            if save_failed:
+                discarded.append((read_id, bc_wells, bc_bci, umi, r1_seq, grna_seq, ibar_seq, 'grna_name_not_in_ref'))
             continue
 
         # Within-guide iBAR match (skip if already done during shared-gRNA resolution)
@@ -1064,7 +1097,7 @@ def _process_rows(rows):
             ibar_seq_corrected, ibar_decoupled,
         ))
 
-    return results, stats
+    return results, discarded, stats
 
 
 # Keep backward-compatible wrapper for single-process mode
@@ -1080,7 +1113,8 @@ def process_chunk(args):
         chunk_df['read_id'], chunk_df['bc_wells'], chunk_df['bc_bci'],
         chunk_df['umi'], chunk_df['r1_seq'],
     ))
-    return _process_rows(rows)
+    results, discarded, stats = _process_rows(rows)
+    return results, discarded, stats
 
 
 def _chunk_generator(barcode_tsv_path, chunk_size):
@@ -1126,6 +1160,12 @@ OUTPUT_COLS_SHORT = OUTPUT_COLS + [
 ]
 
 
+FAILED_COLS = [
+    'read_id', 'bc_wells', 'bc_bci', 'umi', 'r1_seq',
+    'grna_seq', 'ibar_seq', 'failure_reason',
+]
+
+
 def process_library(barcode_tsv_path, output_path, config_dict, n_processes=1,
                     chunk_size=100_000):
     """Process one library with optional multiprocessing.
@@ -1144,32 +1184,52 @@ def process_library(barcode_tsv_path, output_path, config_dict, n_processes=1,
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     n_results_total = 0
+    n_discarded_total = 0
     short_read_mode = config_dict.get('short_read_mode', False)
+    save_failed = config_dict.get('save_failed_reads', False)
     output_cols = OUTPUT_COLS_SHORT if short_read_mode else OUTPUT_COLS
+
+    # Failed reads output path (companion to main output)
+    discarded_path = None
+    if save_failed:
+        discarded_path = output_path.replace('_grna_matches.tsv', '_grna_failed.tsv')
+        if discarded_path == output_path:
+            # Fallback if naming pattern didn't match
+            discarded_path = output_path.replace('.tsv', '_failed.tsv')
 
     # Helper to open output file (gzip or plain)
     import gzip as _gzip
-    def _open_out():
-        if output_path.endswith('.gz'):
-            return _gzip.open(output_path, 'wt')
-        return open(output_path, 'w')
+    def _open_out(path):
+        if path.endswith('.gz'):
+            return _gzip.open(path, 'wt')
+        return open(path, 'w')
 
     if n_processes == 1:
         # Single-process: use _init_worker once, then stream chunks
         _worker_state.clear()
         _init_worker(config_dict)
 
-        with _open_out() as fout:
+        fout = _open_out(output_path)
+        fout_failed = _open_out(discarded_path) if save_failed else None
+        try:
             fout.write('\t'.join(output_cols) + '\n')
+            if fout_failed:
+                fout_failed.write('\t'.join(FAILED_COLS) + '\n')
 
             for i, rows in enumerate(_chunk_generator(barcode_tsv_path, chunk_size)):
-                results, stats = _process_rows(rows)
+                results, discarded, stats = _process_rows(rows)
                 total_stats += stats
 
                 # Write results immediately
                 for r in results:
                     fout.write('\t'.join(str(x) for x in r) + '\n')
                 n_results_total += len(results)
+
+                # Write failed reads
+                if fout_failed and discarded:
+                    for d in discarded:
+                        fout_failed.write('\t'.join(str(x) for x in d) + '\n')
+                    n_discarded_total += len(discarded)
 
                 processed = total_stats['total_reads']
                 elapsed = time.time() - t_start
@@ -1178,25 +1238,38 @@ def process_library(barcode_tsv_path, output_path, config_dict, n_processes=1,
                 match_pct = matched / processed * 100 if processed > 0 else 0
                 print(f"    Chunk {i+1}: {processed:,} reads "
                       f"({rate:,.0f}/s, {match_pct:.1f}% matched)")
+        finally:
+            fout.close()
+            if fout_failed:
+                fout_failed.close()
     else:
         # Multi-process: initialize workers via Pool(initializer=)
         pool = Pool(processes=n_processes,
                     initializer=_init_worker,
                     initargs=(config_dict,))
-        fout = _open_out()
+        fout = _open_out(output_path)
+        fout_failed = _open_out(discarded_path) if save_failed else None
         try:
             fout.write('\t'.join(output_cols) + '\n')
+            if fout_failed:
+                fout_failed.write('\t'.join(FAILED_COLS) + '\n')
 
             chunks_done = 0
             chunk_iter = _chunk_generator(barcode_tsv_path, chunk_size)
 
-            for results, stats in pool.imap_unordered(_process_rows, chunk_iter):
+            for results, discarded, stats in pool.imap_unordered(_process_rows, chunk_iter):
                 total_stats += stats
                 chunks_done += 1
 
                 for r in results:
                     fout.write('\t'.join(str(x) for x in r) + '\n')
                 n_results_total += len(results)
+
+                # Write failed reads
+                if fout_failed and discarded:
+                    for d in discarded:
+                        fout_failed.write('\t'.join(str(x) for x in d) + '\n')
+                    n_discarded_total += len(discarded)
 
                 # Progress every 10 chunks
                 if chunks_done % 10 == 0:
@@ -1212,6 +1285,8 @@ def process_library(barcode_tsv_path, output_path, config_dict, n_processes=1,
                           f"{match_pct:.1f}% matched)")
         finally:
             fout.close()
+            if fout_failed:
+                fout_failed.close()
             pool.close()
             pool.join()
 
@@ -1219,6 +1294,8 @@ def process_library(barcode_tsv_path, output_path, config_dict, n_processes=1,
     print(f"  Completed in {elapsed:.1f}s "
           f"({total_stats['total_reads']/elapsed:,.0f} reads/s)")
     print(f"  Wrote {n_results_total:,} matched reads to {output_path}")
+    if save_failed:
+        print(f"  Wrote {n_discarded_total:,} failed reads to {discarded_path}")
 
     return total_stats
 
@@ -1264,6 +1341,7 @@ def main():
     print(f"  Max Levenshtein (gRNA): {gm['max_lev_dist']}")
     print(f"  Max Levenshtein (iBAR): {gm['max_lev_dist_ibar']}")
     print(f"  Processes: {n_processes}")
+    print(f"  Save failed reads: {gm.get('save_failed_reads', False)}")
 
     # Detect short-read mode: single-guide + no iBAR
     short_read_mode = single_guide_mode and ibar_length == 0
@@ -1354,6 +1432,7 @@ def main():
         'single_guide_mode': single_guide_mode,
         'short_read_mode': short_read_mode,
         'truncated_lengths': [],  # populated per-library via sampling
+        'save_failed_reads': gm.get('save_failed_reads', False),
     }
 
     libraries = cfg['libraries']
