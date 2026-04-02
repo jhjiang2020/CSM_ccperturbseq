@@ -642,6 +642,8 @@ def get_grna_any_cells(cell_df, group_by_gene=False):
                 'n_cells': len(unique_bcs),
             })
 
+    return groups
+
 def filter_and_compute_inferred_gene_kd(adata, umi_df, ctrl_bcs_per_sample, backend='custom', exclude_combos=None, group_by_gene=True, min_cells=5):
     """
     Groups inferred singlets by gene, strict-filters cells that might have received 
@@ -2128,14 +2130,31 @@ def summarize_singlet_counts(adata_obs, split_by='sample', valid_pairs=None, val
     import pandas as pd
     import numpy as np
     
+    # Check what the combo column is named naturally
+    combo_col = 'target_combo' if 'target_combo' in adata_obs.columns else 'target_gene'
+    
+    pair_to_harmonized = {}
     if ref_df is not None:
-        if valid_pairs is None and 'pair_id' in ref_df.columns:
+        if 'pair_id' in ref_df.columns and 'position' in ref_df.columns and 'grna_name' in ref_df.columns:
+            pos1_ref = ref_df[ref_df['position'] == 1].set_index('pair_id')['grna_name']
+            pos2_ref = ref_df[ref_df['position'] == 2].set_index('pair_id')['grna_name']
+            harmonized_ref = pos1_ref.astype(str) + '_' + pos2_ref.astype(str)
+            pair_to_harmonized = harmonized_ref.dropna().to_dict()
+            if valid_pairs is None:
+                valid_pairs = harmonized_ref.dropna().unique()
+        elif valid_pairs is None and 'pair_id' in ref_df.columns:
             valid_pairs = ref_df['pair_id'].dropna().unique()
+
         if valid_combos is None and 'target_combo' in ref_df.columns:
             valid_combos = ref_df['target_combo'].dropna().unique()
             
-    # Check what the combo column is named naturally
-    combo_col = 'target_combo' if 'target_combo' in adata_obs.columns else 'target_gene'
+    # Guarantee iterable structures are isolated string sets preventing Pandas Index lookup collision
+    if valid_pairs is not None:
+        valid_pairs_set = set(str(x) for x in valid_pairs)
+        valid_pairs = list(valid_pairs_set)
+    if valid_combos is not None:
+        valid_combos_set = set(str(x) for x in valid_combos)
+        valid_combos = list(valid_combos_set)
     
     # Find natural subsets
     perfect_df = adata_obs[(adata_obs['combo_type'] == 'singlet') & (adata_obs['detection_status'] == 'complete')].copy()
@@ -2143,15 +2162,19 @@ def summarize_singlet_counts(adata_obs, split_by='sample', valid_pairs=None, val
     
     perfect_df['combo_eval'] = perfect_df[combo_col]
     inferred_df['combo_eval'] = inferred_df[combo_col]
+    perfect_df['pair_eval'] = perfect_df['pair_id'].map(pair_to_harmonized).fillna(perfect_df['pair_id'])
+    inferred_df['pair_eval'] = inferred_df['pair_id'].map(pair_to_harmonized).fillna(inferred_df['pair_id'])
     
     if include_recomb_multiplet:
         m_mask = (adata_obs['combo_type'] == 'multiplet') & (adata_obs['detection_status'] == 'inferred')
-        m_mask &= (adata_obs['pos1_grna'] != 'unassigned') & (~adata_obs['pos1_grna'].str.contains(',', na=False))
-        m_mask &= (adata_obs['pos2_grna'] != 'unassigned') & (~adata_obs['pos2_grna'].str.contains(',', na=False))
+        m_mask &= (adata_obs['pos1_grna'] != 'unassigned') & (~adata_obs['pos1_grna'].astype(str).str.contains(',', na=False))
+        m_mask &= (adata_obs['pos2_grna'] != 'unassigned') & (~adata_obs['pos2_grna'].astype(str).str.contains(',', na=False))
         recomb_df = adata_obs[m_mask].copy()
         
         # Synthesize dynamically recombined combo metrics crossing pos1 and pos2 independently
         recomb_df['combo_eval'] = recomb_df['pos1_target'].astype(str) + '_' + recomb_df['pos2_target'].astype(str)
+        recomb_df['pair_eval'] = recomb_df['pos1_grna'].astype(str) + '_' + recomb_df['pos2_grna'].astype(str)
+        recomb_df['pair_id'] = recomb_df['pair_eval']
     else:
         recomb_df = pd.DataFrame()
         
@@ -2171,32 +2194,61 @@ def summarize_singlet_counts(adata_obs, split_by='sample', valid_pairs=None, val
         def compute_stats(df, label):
             sub_df = df if sp is None else df[df[split_by] == sp]
             
-            p_counts = sub_df['pair_id'].value_counts()
+            p_counts = sub_df['pair_eval'].value_counts()
+            p_counts = p_counts[p_counts > 0]
+            novel_pairs = []
             if valid_pairs is not None:
-                p_counts = p_counts.reindex(valid_pairs, fill_value=0)
+                novel_pairs = [p for p in p_counts.index if str(p) not in valid_pairs_set]
+                all_valid_p = list(valid_pairs_set.union(set(str(x) for x in p_counts.index)))
+                p_counts = p_counts.reindex(all_valid_p, fill_value=0)
             
-            p_desc = p_counts.describe()[['min', 'max', '50%', 'mean']] if len(p_counts) > 0 else pd.Series({'min':0, 'max':0, '50%':0, 'mean':0})
-            p_detected = (p_counts > 0).sum()
-            p_expected = len(valid_pairs) if valid_pairs is not None else len(p_counts)
+            if valid_pairs is not None:
+                p_stats = p_counts.loc[list(valid_pairs_set)]
+                p_desc = p_stats.describe()[['min', 'max', '50%', 'mean']] if len(p_stats) > 0 else pd.Series({'min':0, 'max':0, '50%':0, 'mean':0})
+                p_detected = (p_stats > 0).sum()
+                p_expected = len(valid_pairs)
+            else:
+                p_desc = p_counts.describe()[['min', 'max', '50%', 'mean']] if len(p_counts) > 0 else pd.Series({'min':0, 'max':0, '50%':0, 'mean':0})
+                p_detected = (p_counts > 0).sum()
+                p_expected = len(p_counts)
             
             c_counts = sub_df['combo_eval'].value_counts()
+            c_counts = c_counts[c_counts > 0]
+            novel_combos = []
             if valid_combos is not None:
-                c_counts = c_counts.reindex(valid_combos, fill_value=0)
+                novel_combos = [c for c in c_counts.index if str(c) not in valid_combos_set]
+                all_valid_c = list(valid_combos_set.union(set(str(x) for x in c_counts.index)))
+                c_counts = c_counts.reindex(all_valid_c, fill_value=0)
                 
-            c_desc = c_counts.describe()[['min', 'max', '50%', 'mean']] if len(c_counts) > 0 else pd.Series({'min':0, 'max':0, '50%':0, 'mean':0})
-            c_detected = (c_counts > 0).sum()
-            c_expected = len(valid_combos) if valid_combos is not None else len(c_counts)
+            if valid_combos is not None:
+                c_stats = c_counts.loc[list(valid_combos_set)]
+                c_desc = c_stats.describe()[['min', 'max', '50%', 'mean']] if len(c_stats) > 0 else pd.Series({'min':0, 'max':0, '50%':0, 'mean':0})
+                c_detected = (c_stats > 0).sum()
+                c_expected = len(valid_combos)
+            else:
+                c_desc = c_counts.describe()[['min', 'max', '50%', 'mean']] if len(c_counts) > 0 else pd.Series({'min':0, 'max':0, '50%':0, 'mean':0})
+                c_detected = (c_counts > 0).sum()
+                c_expected = len(c_counts)
             
             print(f"  {label} (Total: {len(sub_df):,})")
             print(f"    - Per Construct ({p_detected:,}/{p_expected:,} pairs) -> Mean: {p_desc['mean']:.1f} | Median: {p_desc['50%']:.1f} | Min: {p_desc['min']:.0f} | Max: {p_desc['max']:.0f}")
             print(f"    - Per Combo     ({c_detected:,}/{c_expected:,} genes) -> Mean: {c_desc['mean']:.1f} | Median: {c_desc['50%']:.1f} | Min: {c_desc['min']:.0f} | Max: {c_desc['max']:.0f}")
             
             missing_pairs = p_counts[p_counts == 0].index.tolist()
-            missing_combos = c_counts[c_counts == 0].index.tolist()
+            if valid_pairs is not None:
+                missing_pairs = [p for p in missing_pairs if str(p) in valid_pairs_set]
             if len(missing_pairs) > 0:
                 print(f"      [!] Missing Pairs ({len(missing_pairs)}): {', '.join(map(str, missing_pairs[:10]))}{' ...' if len(missing_pairs) > 10 else ''}")
+            if len(novel_pairs) > 0:
+                print(f"      [+] Novel Pairs ({len(novel_pairs)}): {', '.join(map(str, novel_pairs[:10]))}{' ...' if len(novel_pairs) > 10 else ''}")
+                
+            missing_combos = c_counts[c_counts == 0].index.tolist()
+            if valid_combos is not None:
+                missing_combos = [c for c in missing_combos if str(c) in valid_combos_set]
             if len(missing_combos) > 0:
                 print(f"      [!] Missing Combos ({len(missing_combos)}): {', '.join(map(str, missing_combos[:10]))}{' ...' if len(missing_combos) > 10 else ''}")
+            if len(novel_combos) > 0:
+                print(f"      [+] Novel Combos ({len(novel_combos)}): {', '.join(map(str, novel_combos[:10]))}{' ...' if len(novel_combos) > 10 else ''}")
             
             res_list.append({
                 'split': sp,
@@ -2238,6 +2290,102 @@ def summarize_singlet_counts(adata_obs, split_by='sample', valid_pairs=None, val
         return out_df, full_df
         
     return out_df
+
+def evaluate_recombinant_multiplets_kd(adata, sample_name, exclude_combos=None, min_cells=5):
+    """
+    Computes KD metrics explicitly for Scenario-1 cells (1 guide pos1 + 1 guide pos2 mismatched),
+    evaluating DE logic for the 2 detected active guides vs the 2 inferred missing structural guides.
+    """
+    import pandas as pd
+    
+    if exclude_combos is None:
+        exclude_combos = []
+        
+    obs = adata.obs
+    
+    # 1. Extract Perfect Singlets for Control
+    perfect_mask = (obs['combo_type'] == 'singlet') & (obs['detection_status'] == 'complete') & (obs['sample'] == sample_name)
+    perfect_df = obs[perfect_mask]
+    ctrl_bcs = list(perfect_df[perfect_df['target_combo'] == 'ctrl_ctrl'].index)
+    
+    if not ctrl_bcs:
+        print(f"  [{sample_name}] Warning: No ctrl_ctrl perfect singlets found.")
+        return pd.DataFrame()
+        
+    # 2. Identify Scenario-1 Cells
+    m_mask = (obs['combo_type'] == 'multiplet') & (obs['detection_status'] == 'inferred') & (obs['sample'] == sample_name)
+    m_mask &= (obs['pos1_grna'] != 'unassigned') & (~obs['pos1_grna'].str.contains(',', na=False))
+    m_mask &= (obs['pos2_grna'] != 'unassigned') & (~obs['pos2_grna'].str.contains(',', na=False))
+    recomb_df = obs[m_mask].copy()
+    
+    if exclude_combos:
+        to_drop = []
+        for idx, row in recomb_df.iterrows():
+            combos_involved = [
+                f"{row.get('pos1_target', '')}_{row.get('pos2_target', '')}", 
+                f"{row.get('pos1_target', '')}_{row.get('inferred_pos2_target', '')}", 
+                f"{row.get('inferred_pos1_target', '')}_{row.get('pos2_target', '')}" 
+            ]
+            if any(c in exclude_combos for c in combos_involved):
+                to_drop.append(idx)
+        recomb_df = recomb_df.drop(index=to_drop)
+        
+    recomb_df['bc_wells'] = recomb_df.index
+    print(f"  [{sample_name}] Scenario-1 Recombined Cells: {len(recomb_df):,}")
+    
+    if len(recomb_df) == 0:
+        return pd.DataFrame()
+        
+    def get_groups(df, gene_col, guide_col, mode_desc, pos_label):
+        grp_list = []
+        def is_control_target(g):
+            if pd.isna(g): return True
+            gs = str(g).lower()
+            return gs in ['unassigned', '', 'none', 'nan'] or 'ctrl' in gs or 'safe' in gs or 'ntc' in gs
+            
+        pooled_bcs = {g: list(set(d['bc_wells']).intersection(adata.obs.index)) 
+                      for g, d in df.groupby(gene_col) if not is_control_target(g)}
+                      
+        for (gene, guide), d in df.groupby([gene_col, guide_col]):
+            if is_control_target(gene): continue
+            bcs = list(set(d['bc_wells']).intersection(adata.obs.index))
+            if len(bcs) < min_cells:
+                fb_bcs = pooled_bcs.get(gene, [])
+                if len(fb_bcs) < min_cells: continue
+                if not any(x['actual_guide'] == f"{gene}_all (fallback)" for x in grp_list):
+                    grp_list.append({
+                        'target_gene': gene,
+                        'guide_name': mode_desc,
+                        'position': pos_label,
+                        'target_combo': f"{gene}_all (fallback)",
+                        'cell_barcodes': fb_bcs,
+                        'actual_guide': f"{gene}_all (fallback)"
+                    })
+            else:
+                grp_list.append({
+                    'target_gene': gene,
+                    'guide_name': mode_desc,
+                    'position': pos_label,
+                    'target_combo': guide,
+                    'cell_barcodes': bcs,
+                    'actual_guide': guide
+                })
+        return grp_list
+
+    groups = []
+    groups.extend(get_groups(recomb_df, 'pos1_target', 'pos1_grna', 'Detected (Recomb)', 'pos1'))
+    groups.extend(get_groups(recomb_df, 'pos2_target', 'pos2_grna', 'Detected (Recomb)', 'pos2'))
+    groups.extend(get_groups(recomb_df, 'inferred_pos1_target', 'inferred_pos1_grna', 'Inferred (Missing)', 'inferred_pos1'))
+    groups.extend(get_groups(recomb_df, 'inferred_pos2_target', 'inferred_pos2_grna', 'Inferred (Missing)', 'inferred_pos2'))
+    
+    if not groups:
+        return pd.DataFrame()
+        
+    metrics_df = compute_kd_metrics(adata, groups, ctrl_bcs, sample_name, min_cells=min_cells)
+    if not metrics_df.empty:
+        metrics_df['actual_guide'] = metrics_df['target_combo']
+        
+    return metrics_df
 
 
 if __name__ == "__main__":
