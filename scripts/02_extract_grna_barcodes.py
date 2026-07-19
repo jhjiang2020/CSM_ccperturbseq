@@ -31,6 +31,18 @@ def load_config(config_path):
         return yaml.safe_load(f)
 
 
+def resolve_output_root(output_dir, output_namespace=None):
+    """Resolve an optional output namespace without changing default paths.
+
+    Relative namespaces live below ``paths.output_dir``; absolute namespaces
+    are used as-is.  With no namespace this returns the historical output root.
+    """
+    if not output_namespace:
+        return Path(output_dir)
+    namespace = Path(output_namespace).expanduser()
+    return namespace if namespace.is_absolute() else Path(output_dir) / namespace
+
+
 def setup_splitpipe_imports(splitpipe_dir):
     """Add split-pipe to path and import necessary modules."""
     sys.path.insert(0, splitpipe_dir)
@@ -152,7 +164,7 @@ def process_grna_library(
     fq1_path, fq2_path, fout,
     bcinfo, bcutils_mod, cy_utils_mod,
     bc_max_edist=1, min_r1_len=20, min_r2_len=50,
-    max_reads=0
+    max_reads=0,
 ):
     """Process a single gRNA library: extract cell barcodes from R2, keep R1.
 
@@ -167,13 +179,11 @@ def process_grna_library(
         min_r1_len: Minimum R1 length
         min_r2_len: Minimum R2 length
         max_reads: Max reads to process (0 = all)
-
     Returns:
         dict with statistics
     """
     # Sample R2 reads to compute barcode correction thresholds
     fq_df = sample_r2_reads(fq2_path)
-
     # Get barcode correction data
     bc_dicts = bcinfo.get_bc_dict(0)  # 0 = all rounds
     counts, ct_thresh = bcinfo.get_perfect_bc_counts(fq_df)
@@ -275,6 +285,11 @@ def main():
                         help="Max reads to process per library (0=all). Overrides config.")
     parser.add_argument("--library", type=str, default=None,
                         help="Process only this sublibrary name (e.g., 'C1'). Default: all.")
+    parser.add_argument(
+        "--output-namespace", default=None,
+        help=("Output root for this source. Relative paths are below paths.output_dir; "
+              "default keeps the historical output layout."),
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -316,16 +331,18 @@ def main():
     # This requires reading the R2 FASTQs first to get barcode frequency
     # We'll use a two-pass approach: first count, then extract
 
-    # Identify which libraries to process
     libraries = cfg['libraries']
-    if args.library:
-        libraries = [lib for lib in libraries if lib['sublibrary_name'] == args.library]
+    selected_library = args.library
+    if selected_library:
+        libraries = [lib for lib in libraries if lib['sublibrary_name'] == selected_library]
         if not libraries:
-            print(f"ERROR: Library '{args.library}' not found in config")
+            print(f"ERROR: Library '{selected_library}' not found in config")
             sys.exit(1)
 
     fastq_dir = cfg['paths']['fastq_dir']
-    output_dir = cfg['paths']['output_dir']
+    output_dir = str(resolve_output_root(
+        cfg['paths']['output_dir'], args.output_namespace
+    ))
     bc_max_edist = cfg['barcode_extraction']['bc_max_edit_dist']
     min_r1_len = cfg['barcode_extraction']['min_r1_length']
     min_r2_len = cfg['barcode_extraction']['min_r2_length']
@@ -346,7 +363,6 @@ def main():
 
         print(f"\n--- Processing gRNA library: {lib_name} (prefix: {grna_prefix}) ---")
 
-        # Find FASTQ files
         r1_files, r2_files = find_fastq_files(fastq_dir, grna_prefix)
         print(f"  R1 files: {[f.name for f in r1_files]}")
         print(f"  R2 files: {[f.name for f in r2_files]}")
@@ -376,7 +392,7 @@ def main():
                     bc_max_edist=bc_max_edist,
                     min_r1_len=min_r1_len,
                     min_r2_len=min_r2_len,
-                    max_reads=reads_left
+                    max_reads=reads_left,
                 )
                 lib_stats.update(stats)
                 if max_reads > 0:
@@ -399,7 +415,7 @@ def main():
         print(f"    Output: {output_path}")
 
     # Save overall stats
-    lib_label = getattr(args, 'library', None) or "all"
+    lib_label = selected_library or "all"
     stats_path = os.path.join(output_dir, 'grna_barcodes', f'{lib_label}_extraction_stats.yaml')
     os.makedirs(os.path.dirname(stats_path), exist_ok=True)
     with open(stats_path, 'w') as f:

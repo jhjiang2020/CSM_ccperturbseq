@@ -12,6 +12,7 @@
 #$ -l h_vmem=16G
 #$ -l h_rt=4:00:00
 #$ -pe smp 4
+#$ -binding linear:4
 
 set -euo pipefail
 
@@ -34,8 +35,10 @@ SCRIPTS_DIR="${PROJECT_DIR}/scripts"
 # --- Initialize conda (parsed from config via grep — no python3 needed yet) ---
 _CONDA_PREFIX=$(grep '^ *conda_prefix:' "${CONFIG}" | head -1 | sed 's/.*: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/')
 _CONDA_ENV=$(grep '^ *conda_env:' "${CONFIG}" | head -1 | sed 's/.*: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/')
-CONDA_PREFIX="${_CONDA_PREFIX:-$HOME/my-conda}"
-CONDA_ENV="${_CONDA_ENV:-splitpipe}"
+[[ -n "${_CONDA_PREFIX}" && -n "${_CONDA_ENV}" ]] || { echo "ERROR: Configure environment.conda_prefix and environment.conda_env" >&2; exit 1; }
+CONDA_PREFIX="${_CONDA_PREFIX}"
+CONDA_ENV="${_CONDA_ENV}"
+[[ -x "${CONDA_PREFIX}/condabin/conda" ]] || { echo "ERROR: Missing configured Conda: ${CONDA_PREFIX}/condabin/conda" >&2; exit 1; }
 eval "$(${CONDA_PREFIX}/condabin/conda shell.bash hook)"
 conda activate "${CONDA_ENV}"
 
@@ -60,7 +63,12 @@ import yaml, os
 with open('${CONFIG}') as f:
     cfg = yaml.safe_load(f)
 out = cfg['paths']['output_dir']
-dirs = [os.path.join(out, f\"gex_{lib['sublibrary_name']}\") for lib in cfg['libraries']]
+existing = cfg.get('gex_decontamination', {}).get('existing_alignment', {})
+if existing.get('enabled', False):
+    template = existing.get('sandbox_output_dir_template', '{output_dir}/gex_{library}_v1_4')
+    dirs = [template.format(output_dir=out, library=lib['sublibrary_name']) for lib in cfg['libraries']]
+else:
+    dirs = [os.path.join(out, f\"gex_{lib['sublibrary_name']}\") for lib in cfg['libraries']]
 print(' '.join(dirs))
 ")
 
@@ -79,6 +87,10 @@ for d in ${SUBLIB_DIRS}; do
     fi
 done
 
+# Fail before combine when an enabled Step 1a filter run is incomplete or was
+# generated from a different guide reference.
+python3 "${SCRIPTS_DIR}/validate_gex_filter_manifests.py" --config "${CONFIG}"
+
 # Execute the custom python wrapper that patches split-pipe's list-index bug at runtime
 python3 "${SCRIPTS_DIR}/splitpipe_wrapper.py" \
     --wrapper_config "${CONFIG}" \
@@ -86,6 +98,7 @@ python3 "${SCRIPTS_DIR}/splitpipe_wrapper.py" \
     --mode comb \
     --sublibraries ${SUBLIB_DIRS} \
     --output_dir "${COMB_OUT}" \
+    --nthreads "${NSLOTS:-4}" \
     --save_anndata
 
 echo ""

@@ -1,0 +1,335 @@
+--- a/splitpipe/preprocess.py
++++ b/splitpipe/preprocess.py
+@@ -7,7 +7,9 @@
+ # Preprocess fastq merge and barcode correction
+ #
+ import gzip
++import importlib.util
+ import multiprocessing
++import os
+ import re
+ import time
+ from collections import Counter
+@@ -38,6 +40,35 @@
+ OBLOCK_SIZE = 200_000
+ 
+ 
++# Optional CSM v1.4 GEX gRNA removal hook. The vendored Parse code remains
++# unchanged unless submit_step1a_gex_array.sh supplies an explicit module path.
++_CSM_GEX_HOOK_MODULE = None
++_CSM_GEX_HOOK_LOAD_ATTEMPTED = False
++
++
++def _csm_load_gex_hook():
++    """Load and preload the environment-gated CSM hook once per process."""
++    global _CSM_GEX_HOOK_MODULE, _CSM_GEX_HOOK_LOAD_ATTEMPTED
++    if _CSM_GEX_HOOK_LOAD_ATTEMPTED:
++        return _CSM_GEX_HOOK_MODULE
++    _CSM_GEX_HOOK_LOAD_ATTEMPTED = True
++
++    hook_path = os.environ.get("CSM_GEX_DECONTAM_HOOK", "")
++    if not hook_path:
++        return None
++    if not os.path.isfile(hook_path):
++        raise RuntimeError(f"CSM GEX decontamination hook not found: {hook_path}")
++
++    spec = importlib.util.spec_from_file_location("csm_gex_grna_preprocess_hook", hook_path)
++    if spec is None or spec.loader is None:
++        raise RuntimeError(f"Cannot load CSM GEX decontamination hook: {hook_path}")
++    module = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(module)
++    module.preload_from_environment()
++    _CSM_GEX_HOOK_MODULE = module
++    return module
++
++
+ # ---------------------------------------------------------------------------
+ #
+ def have_preprocess_ins(spipe, verb=True):
+@@ -85,6 +116,25 @@
+     # Input and output status and list
+     i_ok, i_list = have_preprocess_ins(spipe)
+     o_ok, o_list = have_preprocess_outs(spipe)
++
++    # Never reuse a barcode_head FASTQ produced without the enabled v1.4
++    # filter or with a stale guide reference/policy.
++    try:
++        csm_hook = _csm_load_gex_hook()
++    except Exception as exc:
++        spipe.set_problem(f"Failed to initialize CSM GEX decontamination: {exc}")
++        return False
++    if csm_hook is not None:
++        csm_filter_compatible = csm_hook.existing_filter_manifest_is_compatible()
++        if not csm_filter_compatible:
++            if o_ok:
++                spipe.report_run_story(
++                    "Existing preprocess output has no compatible CSM GEX filter manifest; rerunning pre"
++                )
++            o_ok = False
++            # Alignment and every dependent product were built from the stale
++            # barcode_head FASTQ, so this run must not reuse them either.
++            spipe._set_par_val("reuse", False)
+ 
+     # Run only if don't have output or fresh
+     if (not o_ok) or spipe.force_fresh_files():
+@@ -143,6 +193,29 @@
+     spipe.report_run_story(story)
+     story = f"Preprocess_stat TSO trimmed: {n_tso:<10} {per_tso}"
+     spipe.report_run_story(story)
++    if "csm_gex_filter_positive_reads" in read_stats:
++        n_pos = read_stats["csm_gex_filter_positive_reads"]
++        n_pos_valid = read_stats.get(
++            "csm_gex_filter_positive_valid_barcode_reads", 0
++        )
++        per_pos = utils.report_percent_str(n_pos, n_reads)
++        story = f"Preprocess_stat CSM gRNA filter+: {n_pos:<10} {per_pos}"
++        spipe.report_run_story(story)
++        story = f"Preprocess_stat CSM removed from STAR: {n_pos_valid:<10}"
++        spipe.report_run_story(story)
++        n_full_trim = read_stats.get(
++            "csm_gex_survivor_full_tso_trimmed_reads", 0
++        )
++        n_parse_trim = read_stats.get(
++            "csm_gex_survivor_parse_17mer_trimmed_reads", 0
++        )
++        n_untrimmed = read_stats.get("csm_gex_survivor_untrimmed_reads", 0)
++        story = f"Preprocess_stat CSM full-TSO survivor trim: {n_full_trim:<10}"
++        spipe.report_run_story(story)
++        story = f"Preprocess_stat Parse 17-mer survivor trim: {n_parse_trim:<10}"
++        spipe.report_run_story(story)
++        story = f"Preprocess_stat CSM untrimmed survivor: {n_untrimmed:<10}"
++        spipe.report_run_story(story)
+ 
+ 
+ def pre_write_seq_pipe_stats(spipe, read_stats, valid_R1_lengths, round_to=4):
+@@ -729,6 +802,9 @@
+     f_ind = fqpair.get_f_ind()
+     fastq_new = spipe.chunk_filepath("PF_FASTQ_BC", ind=f_ind, chunk=chunk)
+ 
++    # The immutable classifier is inherited from the parent on Linux/fork.
++    csm_hook = _csm_load_gex_hook()
++
+     fc_story = get_f_ind_chunk_str(f_ind=f_ind, chunk=chunk)
+     spipe.report_run_story2(f"BC correction starting {fc_story}")
+ 
+@@ -749,6 +825,19 @@
+     # Limit used for string matching, so extend by length of TSO string
+     tso_read_limit += tso_len
+ 
++    # Each process gets a worker-local sink. Parse's exact fallback constants
++    # are installed once so the compact hot path can classify, tally, and
++    # choose survivor trimming in one hook call.
++    if csm_hook is not None:
++        csm_hook.start_worker(
++            fastq_index=f_ind,
++            chunk=chunk,
++            parse_tso_sequence=tso_seq,
++            parse_search_end=tso_read_limit,
++        )
++        csm_write_decisions = csm_hook.write_read_decisions_enabled()
++        csm_write_rejected = csm_hook.write_rejected_raw_pairs_enabled()
++
+     # Min read lengths; R1 is parameter; R2 based on amplicon seq
+     r1_min_len = spipe.get_par_val("pre_min_R1_len", as_int=True)
+     r2_min_len = len(spipe.get_par_val("bc_amp_seq", as_str=True))
+@@ -959,16 +1048,75 @@
+                     reads_ambig_bc += 1
+                     good_reads = False
+ 
+-            # Process if good, no ambigs and have all barcodes
+-            if good_reads and bc1 and bc2 and bc3:
++            barcode_valid = bool(good_reads and bc1 and bc2 and bc3)
++            csm_filter_decision = None
++            csm_filter_positive = False
++            csm_trim_end = 0
++            if csm_hook is not None and (len(seq1) >= r1_min_len) and (len(seq2) >= r2_min_len):
++                if csm_write_decisions:
++                    csm_filter_decision = csm_hook.classify_and_record_decision(
++                        header1=header1,
++                        seq1=seq1,
++                        quality1=quality1,
++                        header2=header2,
++                        seq2=seq2,
++                        quality2=quality2,
++                        barcode_valid=barcode_valid,
++                    )
++                else:
++                    csm_filter_decision, csm_trim_end = csm_hook.process_compact(
++                        seq1=seq1,
++                        barcode_valid=barcode_valid,
++                    )
++                csm_filter_positive = bool(csm_filter_decision.filter_positive)
++                if csm_filter_positive and csm_write_rejected and not csm_write_decisions:
++                    csm_hook.record_rejected_pair(
++                        header1=header1,
++                        seq1=seq1,
++                        quality1=quality1,
++                        header2=header2,
++                        seq2=seq2,
++                        quality2=quality2,
++                    )
++                if csm_filter_positive and barcode_valid:
++                    csm_w1 = bc1_seq_to_windzp[bc1]
++                    csm_w2 = bc2_seq_to_windzp[bc2]
++                    csm_w3 = bc3_seq_to_windzp[bc3]
++                    csm_i1 = bc1_seq_to_bci[bc1]
++                    csm_i2 = bc2_seq_to_bci[bc2]
++                    csm_i3 = bc3_seq_to_bci[bc3]
++                    csm_hook.record_barcode_evidence(
++                        header1=header1,
++                        bc_wells=f"{csm_w1}_{csm_w2}_{csm_w3}",
++                        bc_bci=f"{csm_i1}_{csm_i2}_{csm_i3}",
++                        umi=polyN,
++                        seq1=seq1,
++                        quality1=quality1,
++                    )
++
++            # Process if good, no ambigs and have all barcodes. Filter-positive
++            # records are intentionally omitted before barcode_head.fastq/STAR.
++            if barcode_valid and not csm_filter_positive:
+                 reads_valid_barcode += 1
+ 
+-                # Jump past TSO if at start of read, else may not align
+-                index = seq1.find(tso_seq, 0, tso_read_limit)
+-                # print(f"TTT {index} {tso_seq=} {tso_read_limit=} {seq1}")
+-                if index >= 0:
+-                    seq1 = seq1[index + tso_len :]
+-                    quality1 = quality1[index + tso_len :]
+-                    reads_tso_trim += 1
++                # Full/fuzzy 30-bp TSO evidence owns the trim endpoint. Reads
++                # without it retain Parse's exact 17-mer fallback unchanged.
++                if csm_filter_decision is not None and csm_write_decisions:
++                    trim_end, trim_route = csm_hook.resolve_survivor_trim(
++                        decision=csm_filter_decision,
++                        seq1=seq1,
++                        parse_tso_sequence=tso_seq,
++                        parse_search_end=tso_read_limit,
++                    )
++                    csm_hook.record_survivor_trim(trim_route)
++                elif csm_filter_decision is not None:
++                    trim_end = csm_trim_end
++                else:
++                    index = seq1.find(tso_seq, 0, tso_read_limit)
++                    trim_end = index + tso_len if index >= 0 else 0
++                if trim_end > 0:
++                    seq1 = seq1[trim_end:]
++                    quality1 = quality1[trim_end:]
++                    reads_tso_trim += 1
+                 # Save length after any trimming
+                 valid_R1_lengths[len(seq1)] += 1
+@@ -1018,7 +1166,7 @@
+                     valid_bc_counts[w1] += 1
+ 
+             # Not good / don't have three good barcodes
+-            else:
++            elif not barcode_valid:
+                 if keep_no_bc:
+                     print(header1, file=nobc1_out)
+                     print(seq1, file=nobc1_out)
+@@ -1052,6 +1200,7 @@
+         spipe.report_run_story2(f"No-barcode R1 fastq: {nobc1_fname}")
+         spipe.report_run_story2(f"No-barcode R2 fastq: {nobc2_fname}")
+ 
++    csm_read_stats = csm_hook.close_worker() if csm_hook is not None else {}
+     read_stats = {
+         "number_of_reads": number_of_reads,
+         "reads_valid_barcode": reads_valid_barcode,
+@@ -1063,6 +1212,7 @@
+         "bc_edit_dist_1": bc_edit_dist_1,
+         "bc_edit_dist_2": bc_edit_dist_2,
+     }
++    read_stats.update(csm_read_stats)
+ 
+     new_dict = {
+         "read_stats": Counter(read_stats),
+@@ -1079,7 +1229,12 @@
+ 
+     Results stored in passed results queue
+     """
+-    results = preprocess_fastqpair_chunk(spipe, fqpair, chunk=chunk, max_rec=max_rec)
++    try:
++        results = preprocess_fastqpair_chunk(
++            spipe, fqpair, chunk=chunk, max_rec=max_rec
++        )
++    except Exception as exc:
++        results = {"_worker_error": f"{type(exc).__name__}: {exc}"}
+ 
+     queue.put((fqpair.get_f_ind(), chunk, results))
+ 
+@@ -1182,6 +1337,12 @@
+     for _ in m_procs:
+         # Get back fastq index, chunk, counts dict
+         f_ind, chunk, counts = queue.get()
++        if counts is None or "_worker_error" in counts:
++            detail = "no result" if counts is None else counts["_worker_error"]
++            spipe.set_problem(
++                f"Preprocess worker failed (fastq={f_ind+1}, chunk={chunk}): {detail}"
++            )
++            continue
+         result_dict[(f_ind, chunk)] = counts
+ 
+     # Make sure all finish
+@@ -1189,6 +1350,8 @@
+         p.join()
+ 
+     # Combine counts
++    if spipe.any_problem():
++        return None
+     results = merge_stat_count_results(result_dict)
+ 
+     spipe.report_run_story("Done " + round_str)
+@@ -1208,6 +1371,12 @@
+     if not n_threads:
+         n_threads = 1
+ 
++    try:
++        csm_hook = _csm_load_gex_hook()
++    except Exception as exc:
++        spipe.set_problem(f"Failed to initialize CSM GEX decontamination: {exc}")
++        return 0
++
+     # Get read sample stats
+     # This also sets perfect bc counts into bc_info
+     spipe.report_run_story("Getting read stats and counts for BC correction")
+@@ -1278,6 +1447,15 @@
+             if not ok:
+                 spipe.set_problem(story)
+ 
++        if csm_hook is not None and spipe.no_problems():
++            try:
++                manifest_path = csm_hook.finalize_from_environment()
++                spipe.report_run_story(
++                    f"CSM GEX decontamination manifest: {manifest_path}"
++                )
++            except Exception as exc:
++                spipe.set_problem(f"Failed to finalize CSM GEX decontamination: {exc}")
++
+     if results and spipe.no_problems():
+         n = read_stats["number_of_reads"]
+         report_pre_stats(spipe, read_stats)
+--- a/splitpipe/molinfo.py
++++ b/splitpipe/molinfo.py
+@@ -11,6 +11,7 @@
+ from collections import defaultdict
+ from itertools import combinations
+ from multiprocessing import Process
++import os
+ 
+ import numpy as np
+ import pandas as pd
+@@ -1101,7 +1102,13 @@
+             "PF_AW_UF_MATRIX", as_list=n_parts, check_gz=True
+         )
+-        # Non-annotated bam file
+-        rm_files.append(spipe.filepath("PF_BAM_SORTED", None))
++        # Non-annotated bam file. v1.4 keeps only this harmonized contract when
++        # explicitly requested; chunk/temp cleanup proceeds unchanged.
++        if os.environ.get("CSM_PRESERVE_HARMONIZED_BAM", "") != "1":
++            rm_files.append(spipe.filepath("PF_BAM_SORTED", None))
++        else:
++            spipe.report_run_story(
++                "Preserving CSM harmonized sorted BAM after molinfo"
++            )
+ 
+         utils.check_and_rm_file(rm_files)
+     else:

@@ -21,6 +21,13 @@ environment:
   # Conda environment name to activate for pipeline scripts
   conda_env: "splitpipe"
 
+# --- Broad UGER resources ---
+uger:
+  step1a:
+    slots: 16
+    memory_per_slot_gb: 8
+    runtime_hours: 48
+
 # --- Paths ---
 paths:
   # Root directory where the pipeline lives
@@ -91,6 +98,51 @@ splitpipe:
   # Skip kit score check (--kit_score_skip). Set to true to bypass kit
   # score restrictions that can cause failures on some sublibraries.
   bypass_kit_score: true
+
+# --- v1.4: GEX gRNA cross-contamination removal ---
+# Universal RT uses both poly(A) and gRNA probes; this removes the small amount
+# of short gRNA product that escapes the later GEX/gRNA size selection.
+# Filter-negative reads with a full/fuzzy TSO are trimmed at that detected
+# endpoint; reads without a full TSO retain Parse's exact-17-mer fallback.
+gex_decontamination:
+  enabled: true
+  integration: "splitpipe_pre_router"
+  tso_max_edit_dist: 3
+  max_tso_start: 2
+  tso_matching:
+    backend: "edlib"
+  filter_matching:
+    backend: "packed_inline"
+    guide_distance: "hamming"
+    max_guide_mismatches: 1
+    allow_guide_indels: false
+    full_guide_required: true
+    remove_reference_supported_ambiguous_hits: true
+  io:
+    write_rejected_raw_pairs: true
+    keep_rejected_raw_pairs_after_step1c: true
+    write_read_decisions: false
+  step1c:
+    enabled: false
+    output_namespace: "gex_grna_identity"
+    strict_matching:
+      enabled: true
+      max_guide_edit_distance: 1
+      max_ibar_edit_distance: 1
+      require_resolved_ibar_in_dual_mode: true
+      reject_ibar_decoupled: true
+  combine_with_grna_arm:
+    enabled: false
+    combine_before_umi_collapse: true
+    retain_source_provenance: true
+  existing_alignment:
+    enabled: false
+    policy: "auto_sandbox"
+    source_output_dir_template: "{output_dir}/gex_{library}"
+    sandbox_output_dir_template: "{output_dir}/gex_{library}_v1_4"
+    bam_backend: "auto"
+  require_qc_policy: false
+  qc_policy_file: "references/gex_grna_filter_policy.yaml"
 
 # --- Library Definitions ---
 # The pipeline dynamically scales its array jobs based on the number of entries
@@ -172,7 +224,13 @@ grna_structure:
   # Expected iBAR length (fixed)
   ibar_length: 7
   # Maximum edit distance for finding Split_TSO in R1 (semi-global alignment).
-  # TSO can appear at a variable offset (typically ~7bp) from R1 start.
+  # Dedicated gRNA: circularization-capture amplification adds a random N7
+  # between the sequencing-primer/index side of the molecule and the TSO, so
+  # intact TSO starts at R1 offset 7. GEX size-selection carry-over lacks N7.
+  # i7/i5 remain separate index reads; no additional N3 R1 prefix is assumed.
+  # GEX-derived guide
+  # reads start at offset 0; v1.4 separately tolerates offsets 1-2 for rare 5'
+  # damage/sequencing error.
   # Higher values tolerate more sequencing errors but may find false TSOs.
   tso_max_edit_dist: 3
   # Maximum allowed COMBINED Hamming mismatches for stem+tracr anchor verification.

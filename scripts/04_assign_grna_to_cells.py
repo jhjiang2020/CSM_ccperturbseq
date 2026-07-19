@@ -38,6 +38,20 @@ def _resolve_match_path(output_dir, lib_name):
     return None
 
 
+def _resolve_gex_match_path(output_dir, namespace, lib_name):
+    """Find a Step1c match file without changing the Step 3 row schema."""
+    for ext in ('.tsv.gz', '.tsv'):
+        path = os.path.join(
+            output_dir,
+            namespace,
+            'grna_matches',
+            f"{lib_name}_grna_matches{ext}",
+        )
+        if os.path.exists(path):
+            return path
+    return None
+
+
 def stream_library_umi_dedup(match_path, lib_name, sample_name, sublib_index,
                              group_cols, max_umi_edits=1, min_reads_per_umi=1,
                              chunk_size=500_000):
@@ -184,6 +198,227 @@ def stream_library_umi_dedup(match_path, lib_name, sample_name, sublib_index,
     return deduped, lib_stats
 
 
+def stream_library_umi_dedup_sources(
+    source_paths,
+    lib_name,
+    sample_name,
+    sublib_index,
+    group_cols,
+    max_umi_edits=1,
+    min_reads_per_umi=1,
+    require_resolved_ibar_sources=None,
+    chunk_size=500_000,
+):
+    """Collapse read evidence from multiple sources in one UMI accumulator.
+
+    ``source_paths`` is an ordered sequence of ``(source_name, match_path)``
+    pairs. Read counts from all sources are combined *before*
+    ``min_reads_per_umi`` and directional collapse. Source-specific standalone
+    counts and union-cluster provenance are retained in the returned rows.
+
+    In dual/iBAR mode callers may put ``"gex"`` in
+    ``require_resolved_ibar_sources``. Those rows must carry a non-empty
+    ``ibar_seq_corrected`` from the ordinary Step 3 parser before they are
+    eligible for the construct-aware union.
+    """
+    import time
+
+    t0 = time.time()
+    require_resolved_ibar_sources = set(require_resolved_ibar_sources or ())
+    source_paths = [(str(source), str(path)) for source, path in source_paths]
+    source_names = [source for source, _ in source_paths]
+    if len(source_names) != len(set(source_names)):
+        raise ValueError(f"Duplicate evidence source names: {source_names}")
+
+    needed_cols = list(
+        set([c for c in group_cols if c != 'ibar_seq_unresolved'] + ['umi'])
+    )
+    if 'ibar_seq_unresolved' in group_cols and 'ibar_seq' not in needed_cols:
+        needed_cols.append('ibar_seq')
+
+    # group -> UMI -> total reads; and group -> UMI -> source -> reads
+    umi_accum = defaultdict(Counter)
+    source_accum = defaultdict(dict)
+    source_stats = {source: Counter() for source in source_names}
+    unique_cells = set()
+    unique_guides = set()
+
+    for source, match_path in source_paths:
+        header_cols = pd.read_csv(match_path, sep='\t', nrows=0).columns.tolist()
+        missing = [col for col in needed_cols if col not in header_cols]
+        if missing:
+            raise ValueError(
+                f"{source} match file {match_path} is missing columns: {missing}"
+            )
+        read_cols = list(needed_cols)
+        if source in require_resolved_ibar_sources:
+            if 'ibar_seq_corrected' not in header_cols:
+                raise ValueError(
+                    f"{source} evidence requires resolved iBARs, but "
+                    f"ibar_seq_corrected is absent from {match_path}"
+                )
+            if 'ibar_seq_corrected' not in read_cols:
+                read_cols.append('ibar_seq_corrected')
+
+        for chunk in pd.read_csv(
+            match_path, sep='\t', usecols=read_cols, chunksize=chunk_size
+        ):
+            source_stats[source]['input_reads'] += len(chunk)
+            if source in require_resolved_ibar_sources:
+                corrected = chunk['ibar_seq_corrected'].fillna('').astype(str)
+                chunk = chunk[corrected != ''].copy()
+            source_stats[source]['eligible_reads'] += len(chunk)
+            if len(chunk) == 0:
+                continue
+
+            if sublib_index is not None:
+                chunk['bc_wells'] = f"{sublib_index}_" + chunk['bc_wells'].astype(str)
+
+            if 'ibar_seq_unresolved' in group_cols:
+                chunk['ibar_seq_corrected'] = chunk['ibar_seq_corrected'].fillna('')
+                chunk['ibar_seq'] = chunk['ibar_seq'].fillna('')
+                unresolved_mask = chunk['ibar_seq_corrected'] == ''
+                chunk['ibar_seq_unresolved'] = ''
+                chunk.loc[unresolved_mask, 'ibar_seq_unresolved'] = chunk.loc[
+                    unresolved_mask, 'ibar_seq'
+                ]
+
+            unique_cells.update(chunk['bc_wells'].unique())
+            unique_guides.update(chunk['grna_name'].unique())
+            for row in chunk.itertuples(index=False):
+                key = tuple(getattr(row, c) for c in group_cols)
+                umi = row.umi
+                umi_accum[key][umi] += 1
+                per_umi = source_accum[key].setdefault(umi, Counter())
+                per_umi[source] += 1
+
+    reads_per_umi_dist = Counter()
+    total_umis_raw = 0
+    for umi_counts in umi_accum.values():
+        for read_count in umi_counts.values():
+            reads_per_umi_dist[read_count] += 1
+            total_umis_raw += 1
+
+    records = []
+    total_reads = sum(s['eligible_reads'] for s in source_stats.values())
+    total_umis_after_filter = 0
+    total_umis_after_collapse = 0
+    umis_filtered = 0
+    reads_filtered = 0
+    provenance_totals = Counter()
+
+    for group_key, raw_union_counts in umi_accum.items():
+        union_counts = Counter(
+            {
+                umi: count
+                for umi, count in raw_union_counts.items()
+                if count >= min_reads_per_umi
+            }
+        )
+        umis_filtered += len(raw_union_counts) - len(union_counts)
+        reads_filtered += sum(
+            count
+            for umi, count in raw_union_counts.items()
+            if umi not in union_counts
+        )
+        if not union_counts:
+            continue
+
+        total_umis_after_filter += len(union_counts)
+        union_map = _directional_umi_cluster_map(
+            dict(union_counts), max_edits=max_umi_edits
+        )
+        union_roots = set(union_map.values())
+        total_umis_after_collapse += len(union_roots)
+
+        cluster_sources = defaultdict(set)
+        for umi, root in union_map.items():
+            cluster_sources[root].update(source_accum[group_key][umi].keys())
+
+        cluster_provenance = Counter()
+        for sources in cluster_sources.values():
+            if len(sources) > 1:
+                cluster_provenance['both'] += 1
+            else:
+                cluster_provenance[next(iter(sources))] += 1
+        provenance_totals.update(cluster_provenance)
+
+        row = dict(zip(group_cols, group_key))
+        row['umi_count'] = len(union_roots)
+        row['umi_count_raw'] = len(union_counts)
+        row['read_count'] = sum(union_counts.values())
+        row['sublibrary'] = lib_name
+        row['sample_name'] = sample_name
+
+        sources_present = set()
+        for source in source_names:
+            source_raw = Counter(
+                {
+                    umi: per_source[source]
+                    for umi, per_source in source_accum[group_key].items()
+                    if per_source.get(source, 0) >= min_reads_per_umi
+                }
+            )
+            source_map = _directional_umi_cluster_map(
+                dict(source_raw), max_edits=max_umi_edits
+            )
+            row[f'exact_umi_count_{source}'] = len(source_raw)
+            row[f'umi_count_{source}'] = len(set(source_map.values()))
+            row[f'read_count_{source}'] = sum(
+                source_accum[group_key][umi].get(source, 0) for umi in union_counts
+            )
+            if row[f'read_count_{source}'] > 0:
+                sources_present.add(source)
+
+        row['exact_umi_count_overlap'] = sum(
+            1
+            for umi in union_counts
+            if sum(
+                source_accum[group_key][umi].get(source, 0) > 0
+                for source in source_names
+            )
+            > 1
+        )
+        row['umi_count_both_sources'] = cluster_provenance.get('both', 0)
+        for source in source_names:
+            row[f'umi_count_{source}_only'] = cluster_provenance.get(source, 0)
+        row['source'] = (
+            'both' if len(sources_present) > 1 else next(iter(sources_present))
+        )
+        records.append(row)
+
+    deduped = pd.DataFrame(records)
+    lib_stats = {
+        'total_reads': int(total_reads),
+        'unique_cells': len(unique_cells),
+        'unique_guides': len(unique_guides),
+        'groups': len(deduped),
+        'elapsed_s': time.time() - t0,
+        'total_umis_raw': total_umis_raw,
+        'total_umis_after_filter': total_umis_after_filter,
+        'total_umis_after_collapse': total_umis_after_collapse,
+        'umis_filtered_low_reads': umis_filtered,
+        'reads_filtered_low_reads': reads_filtered,
+        'reads_per_umi_dist': dict(reads_per_umi_dist),
+        'source_stats': {
+            source: {key: int(value) for key, value in stats.items()}
+            for source, stats in source_stats.items()
+        },
+        'cluster_provenance': dict(provenance_totals),
+    }
+    lib_stats['sequencing_saturation'] = round(
+        1.0 - total_umis_after_collapse / total_reads if total_reads else 0.0, 4
+    )
+    lib_stats['umis_collapsed'] = int(
+        total_umis_after_filter - total_umis_after_collapse
+    )
+    print(
+        f"    {lib_name}: {total_reads:,} eligible reads from "
+        f"{', '.join(source_names)} -> {total_umis_after_collapse:,} UMI clusters"
+    )
+    return deduped, lib_stats
+
+
 def _hamming_dist(a, b):
     """Fast Hamming distance for equal-length strings."""
     return sum(c1 != c2 for c1, c2 in zip(a, b))
@@ -206,11 +441,19 @@ def _directional_umi_collapse(umi_counts, max_edits=1):
            (i.e., the child's count is consistent with being a PCR error of the parent)
         4. Count remaining unmerged clusters
     """
-    if len(umi_counts) <= 1:
-        return len(umi_counts)
+    cluster_map = _directional_umi_cluster_map(umi_counts, max_edits=max_edits)
+    return len(set(cluster_map.values()))
 
-    if max_edits == 0:
-        return len(umi_counts)  # no correction, just count unique
+
+def _directional_umi_cluster_map(umi_counts, max_edits=1):
+    """Return ``{observed_umi: cluster_representative}``.
+
+    Retaining membership uses the historical directional-collapse traversal
+    while allowing the optional dedicated+GEX merge to attach source
+    provenance to each final molecule.
+    """
+    if len(umi_counts) <= 1 or max_edits <= 0:
+        return {umi: umi for umi in umi_counts}
 
     # Sort by count descending
     umis = sorted(umi_counts.keys(), key=lambda u: umi_counts[u], reverse=True)
@@ -233,9 +476,7 @@ def _directional_umi_collapse(umi_counts, max_edits=1):
                 if counts[umi_high] >= 2 * counts[umi_low] - 1:
                     parent[umi_low] = umi_high
 
-    # Count clusters (UMIs that are NOT collapsed into anything)
-    n_clusters = sum(1 for u in umis if u not in parent)
-    return n_clusters
+    return {umi: parent.get(umi, umi) for umi in umis}
 
 
 def assign_single_guides(deduped_df, min_umi_threshold=5,
@@ -1033,6 +1274,362 @@ def _process_one_library(task, group_cols, max_umi_edits, min_reads_per_umi):
     )
 
 
+def _source_mode_tasks(cfg, output_dir, source_mode, gex_namespace):
+    """Resolve per-library inputs for one assignment product."""
+    tasks = []
+    missing = []
+    for sublib_idx, lib in enumerate(cfg['libraries']):
+        lib_name = lib['sublibrary_name']
+        dedicated_path = _resolve_match_path(output_dir, lib_name)
+        gex_path = _resolve_gex_match_path(output_dir, gex_namespace, lib_name)
+        if source_mode == 'dedicated':
+            if dedicated_path is None:
+                print(f"  WARNING: Match file not found for {lib_name}")
+                continue
+            paths = [('dedicated', dedicated_path)]
+        elif source_mode == 'gex':
+            if gex_path is None:
+                missing.append(f"{lib_name}: GEX Step1c match file")
+                continue
+            paths = [('gex', gex_path)]
+        elif source_mode == 'combined':
+            absent = []
+            if dedicated_path is None:
+                absent.append('dedicated')
+            if gex_path is None:
+                absent.append('GEX Step1c')
+            if absent:
+                missing.append(f"{lib_name}: {', '.join(absent)} match file")
+                continue
+            paths = [('dedicated', dedicated_path), ('gex', gex_path)]
+        else:
+            raise ValueError(f"Unknown source mode: {source_mode}")
+        tasks.append((paths, lib_name, lib['sample_name'], sublib_idx))
+
+    if missing:
+        raise FileNotFoundError(
+            f"Incomplete {source_mode} evidence; refusing a partial matrix:\n  "
+            + "\n  ".join(missing)
+        )
+    if not tasks:
+        if source_mode == 'dedicated':
+            raise FileNotFoundError("No match files found. Run Step 3 first.")
+        raise FileNotFoundError(f"No {source_mode} Step 3 match files found.")
+    return tasks
+
+
+def _annotate_and_assign(deduped_df, ref_df, available_cols, group_cols, ga):
+    """Apply the unchanged design annotation and guide-calling logic."""
+    dual_mode = ga.get('dual_guide_counting_mode', False)
+    if ref_df is not None:
+        if dual_mode:
+            ibar_cols = [
+                c for c in group_cols
+                if 'ibar' in c and c != 'ibar_seq_unresolved'
+            ]
+            if not ibar_cols:
+                raise ValueError(
+                    "dual_guide_counting_mode requires resolved iBAR grouping"
+                )
+            ibar_col = ibar_cols[0]
+            ref_annot = ref_df[available_cols + ['ibar_seq']].drop_duplicates()
+            deduped_df = deduped_df.merge(
+                ref_annot,
+                left_on=['grna_name', ibar_col],
+                right_on=['grna_name', 'ibar_seq'],
+                how='left',
+            )
+            print(
+                "\n  Joined dual-guide design annotations on "
+                f"grna_name + {ibar_col}"
+            )
+        else:
+            ref_annot = ref_df[available_cols].drop_duplicates(
+                subset=['grna_name']
+            )
+            deduped_df = deduped_df.merge(
+                ref_annot, on='grna_name', how='left'
+            )
+            print("\n  Joined single-guide design annotations")
+
+    if dual_mode:
+        if ref_df is None:
+            raise ValueError(
+                "dual_guide_counting_mode requires paths.grna_reference"
+            )
+        ibar_cols = [
+            c for c in group_cols
+            if 'ibar' in c and c != 'ibar_seq_unresolved'
+        ]
+        if not ibar_cols:
+            raise ValueError(
+                "dual_guide_counting_mode requires resolved iBAR evidence"
+            )
+        assignment_df = assign_dual_guide_pairs(
+            deduped_df,
+            ref_df=ref_df,
+            min_umi_threshold=ga['min_umi_threshold'],
+            ibar_col=ibar_cols[0],
+        )
+    else:
+        assignment_df = assign_single_guides(
+            deduped_df,
+            min_umi_threshold=ga['min_umi_threshold'],
+            multiplet_strategy=ga['multiplet_strategy'],
+            min_dominance_fraction=ga['min_dominance_fraction'],
+        )
+    return deduped_df, assignment_df
+
+
+def _stream_assignment_product(
+    cfg,
+    output_dir,
+    source_mode,
+    gex_namespace,
+    dedup_ibar,
+    max_umi_edits,
+    min_reads_per_umi,
+    ncpus,
+    ref_df,
+    available_cols,
+):
+    """Build one dedicated, GEX-only, or union assignment product."""
+    tasks = _source_mode_tasks(cfg, output_dir, source_mode, gex_namespace)
+    group_cols = _determine_group_cols(tasks[0][0][0][1], dedup_ibar)
+    print(f"  Grouping by: {group_cols}")
+
+    all_deduped = []
+    lib_stats_all = {}
+    ga = cfg['guide_assignment']
+    dual_mode = ga.get('dual_guide_counting_mode', False)
+
+    # Preserve the established multiprocessing path for the default arm.
+    if source_mode == 'dedicated' and ncpus > 1 and len(tasks) > 1:
+        from functools import partial
+        from multiprocessing import Pool
+
+        legacy_tasks = [
+            (paths[0][1], lib_name, sample_name, sublib_idx)
+            for paths, lib_name, sample_name, sublib_idx in tasks
+        ]
+        worker = partial(
+            _process_one_library,
+            group_cols=group_cols,
+            max_umi_edits=max_umi_edits,
+            min_reads_per_umi=min_reads_per_umi,
+        )
+        with Pool(min(ncpus, len(legacy_tasks))) as pool:
+            results = pool.map(worker, legacy_tasks)
+        for (deduped, stats), (_, lib_name, _, _) in zip(results, legacy_tasks):
+            all_deduped.append(deduped)
+            lib_stats_all[lib_name] = stats
+    else:
+        for paths, lib_name, sample_name, sublib_idx in tasks:
+            if source_mode == 'dedicated':
+                deduped, stats = stream_library_umi_dedup(
+                    paths[0][1],
+                    lib_name,
+                    sample_name,
+                    sublib_idx,
+                    group_cols=group_cols,
+                    max_umi_edits=max_umi_edits,
+                    min_reads_per_umi=min_reads_per_umi,
+                )
+            else:
+                deduped, stats = stream_library_umi_dedup_sources(
+                    paths,
+                    lib_name,
+                    sample_name,
+                    sublib_idx,
+                    group_cols=group_cols,
+                    max_umi_edits=max_umi_edits,
+                    min_reads_per_umi=min_reads_per_umi,
+                    require_resolved_ibar_sources=(
+                        {'gex'} if dual_mode else set()
+                    ),
+                )
+            all_deduped.append(deduped)
+            lib_stats_all[lib_name] = stats
+
+    nonempty = [frame for frame in all_deduped if len(frame) > 0]
+    if not nonempty:
+        if source_mode == 'gex':
+            # Zero rejected pairs or zero ordinary Step-3 matches is a valid
+            # Step 1c outcome, especially for short dual-guide reads with no
+            # observable iBAR. Install a complete empty product instead of
+            # turning a successful decontamination run into a pipeline error.
+            dedup_columns = list(dict.fromkeys(
+                group_cols + [
+                    'umi_count', 'umi_count_raw', 'read_count',
+                    'sublibrary', 'sample_name',
+                    'exact_umi_count_gex', 'umi_count_gex',
+                    'read_count_gex', 'exact_umi_count_overlap',
+                    'umi_count_both_sources', 'umi_count_gex_only', 'source',
+                ]
+            ))
+            assignment_columns = list(dict.fromkeys(
+                ['bc_wells', 'grna_name', 'target_gene', 'umi_count']
+            ))
+            print(
+                "  WARNING: no GEX-derived reads passed ordinary Step 3; "
+                "writing a complete empty Step 1c identity product"
+            )
+            return {
+                'mode': source_mode,
+                'deduped': pd.DataFrame(columns=dedup_columns),
+                'assignment': pd.DataFrame(columns=assignment_columns),
+                'matrix': sparse.csr_matrix((0, 0), dtype=np.int64),
+                'barcodes': [],
+                'guides': [],
+                'group_cols': group_cols,
+                'lib_stats': lib_stats_all,
+            }
+        raise ValueError(
+            f"No eligible {source_mode} guide evidence remained after filtering"
+        )
+    deduped_df = pd.concat(nonempty, ignore_index=True)
+    deduped_df, assignment_df = _annotate_and_assign(
+        deduped_df, ref_df, available_cols, group_cols, ga
+    )
+    matrix, barcodes, guides = build_guide_umi_matrix(deduped_df)
+    return {
+        'mode': source_mode,
+        'deduped': deduped_df,
+        'assignment': assignment_df,
+        'matrix': matrix,
+        'barcodes': barcodes,
+        'guides': guides,
+        'group_cols': group_cols,
+        'lib_stats': lib_stats_all,
+    }
+
+
+def _write_assignment_product(product, output_dir, gex_namespace):
+    """Write a product using the documented source-specific filenames."""
+    from scipy.io import mmwrite
+
+    mode = product['mode']
+    if mode == 'dedicated':
+        assign_dir = os.path.join(output_dir, 'grna_assignment')
+        names = {
+            'assignment': 'grna_cell_assignment.csv',
+            'counts': 'grna_umi_counts.csv.gz',
+            'matrix': 'grna_umi_matrix.mtx',
+            'barcodes': 'grna_matrix_barcodes.txt',
+            'guides': 'grna_matrix_guides.txt',
+        }
+    elif mode == 'gex':
+        assign_dir = os.path.join(
+            output_dir, gex_namespace, 'grna_assignment'
+        )
+        names = {
+            'assignment': 'gex_grna_assignments.csv.gz',
+            'counts': 'gex_grna_umi_counts.csv.gz',
+            'matrix': 'gex_grna_umi_matrix.mtx',
+            'barcodes': 'gex_grna_matrix_barcodes.txt',
+            'guides': 'gex_grna_matrix_guides.txt',
+        }
+    else:
+        assign_dir = os.path.join(output_dir, 'grna_assignment')
+        names = {
+            'assignment': 'grna_cell_assignment_combined.csv',
+            'counts': 'grna_umi_counts_by_source.csv.gz',
+            'matrix': 'grna_umi_matrix_combined.mtx',
+            'barcodes': 'grna_matrix_combined_barcodes.txt',
+            'guides': 'grna_matrix_combined_guides.txt',
+        }
+
+    os.makedirs(assign_dir, exist_ok=True)
+    product['assignment'].to_csv(
+        os.path.join(assign_dir, names['assignment']),
+        index=False,
+        compression='gzip' if names['assignment'].endswith('.gz') else None,
+    )
+    product['deduped'].to_csv(
+        os.path.join(assign_dir, names['counts']),
+        index=False,
+        compression='gzip',
+    )
+    mmwrite(os.path.join(assign_dir, names['matrix']), product['matrix'])
+    pd.Series(product['barcodes']).to_csv(
+        os.path.join(assign_dir, names['barcodes']), index=False, header=False
+    )
+    pd.Series(product['guides']).to_csv(
+        os.path.join(assign_dir, names['guides']), index=False, header=False
+    )
+
+    summary = {
+        'source_mode': mode,
+        'combined_used_for_final_calls': mode == 'combined',
+        'total_input_reads': int(sum(
+            stats.get('total_reads', 0)
+            for stats in product['lib_stats'].values()
+        )),
+        'total_umi_clusters': int(product['deduped']['umi_count'].sum()),
+        'cells_with_evidence': int(product['deduped']['bc_wells'].nunique()),
+        'cells_with_assignment': int(
+            product['assignment']['bc_wells'].nunique()
+            if 'bc_wells' in product['assignment'] else 0
+        ),
+        'libraries': product['lib_stats'],
+    }
+    if mode in ('gex', 'combined'):
+        source_names = ('gex',) if mode == 'gex' else ('dedicated', 'gex')
+        summary['source_counts'] = {}
+        for source in source_names:
+            summary['source_counts'][source] = {
+                'reads_in_retained_union_umis': int(
+                    product['deduped'].get(
+                        f'read_count_{source}', pd.Series(dtype=int)
+                    ).sum()
+                ),
+                'exact_umis_after_source_only_read_filter': int(
+                    product['deduped'].get(
+                        f'exact_umi_count_{source}', pd.Series(dtype=int)
+                    ).sum()
+                ),
+                'collapsed_umis_after_source_only_read_filter': int(
+                    product['deduped'].get(
+                        f'umi_count_{source}', pd.Series(dtype=int)
+                    ).sum()
+                ),
+                'union_clusters_from_source_only': int(
+                    product['deduped'].get(
+                        f'umi_count_{source}_only', pd.Series(dtype=int)
+                    ).sum()
+                ),
+            }
+        summary['overlap'] = {
+            'exact_umis_observed_in_multiple_sources': int(
+                product['deduped'].get(
+                    'exact_umi_count_overlap', pd.Series(dtype=int)
+                ).sum()
+            ),
+            'union_clusters_with_multiple_sources': int(
+                product['deduped'].get(
+                    'umi_count_both_sources', pd.Series(dtype=int)
+                ).sum()
+            ),
+        }
+        if mode == 'combined':
+            summary['incremental_gex_union_clusters'] = int(
+                product['deduped'].get(
+                    'umi_count_gex_only', pd.Series(dtype=int)
+                ).sum()
+            )
+    if mode == 'gex':
+        summary_path = os.path.join(assign_dir, 'step1c_summary.yaml')
+    elif mode == 'combined':
+        summary_path = os.path.join(assign_dir, 'grna_gex_merge_summary.yaml')
+    else:
+        summary_path = os.path.join(assign_dir, 'grna_qc_stats.yaml')
+    if mode != 'dedicated':
+        with open(summary_path, 'w') as handle:
+            yaml.safe_dump(summary, handle, sort_keys=False)
+    print(f"  Saved {mode} assignment products under: {assign_dir}")
+    return assign_dir
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Assign gRNAs to cells via UMI deduplication"
@@ -1040,6 +1637,19 @@ def main():
     parser.add_argument("--config", required=True, help="Path to config.yaml")
     parser.add_argument("--ncpus", type=int, default=1,
                         help="Number of CPUs for parallel library processing")
+    parser.add_argument(
+        "--source-mode", "--source_mode",
+        choices=('auto', 'dedicated', 'gex', 'combined'),
+        default='auto',
+        help=(
+            "Evidence product to build. auto preserves the dedicated-only "
+            "workflow unless gex_decontamination Step1c/merge is enabled."
+        ),
+    )
+    parser.add_argument(
+        "--output-namespace", default=None,
+        help="Override gex_decontamination.step1c.output_namespace",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -1049,6 +1659,13 @@ def main():
     max_umi_edits = ga.get('max_umi_edits', 1)
     min_reads_per_umi = ga.get('min_reads_per_umi', 1)
     compute_saturation = ga.get('compute_saturation_curve', True)
+    decontam = cfg.get('gex_decontamination', {})
+    step1c_cfg = decontam.get('step1c', {})
+    combine_cfg = decontam.get('combine_with_grna_arm', {})
+    gex_namespace = (
+        args.output_namespace
+        or step1c_cfg.get('output_namespace', 'gex_grna_identity')
+    )
 
     # Auto-override: disable iBAR dedup when ibar_length == 0
     ibar_length = cfg.get('grna_structure', {}).get('ibar_length', 7)
@@ -1064,6 +1681,7 @@ def main():
     print(f"  Min reads per UMI:       {min_reads_per_umi}")
     print(f"  Saturation curve:        {compute_saturation}")
     print(f"  Parallel CPUs:           {args.ncpus}")
+    print(f"  Requested source mode:   {args.source_mode}")
     print(f"{'='*60}")
 
     # Load reference table for design annotations
@@ -1079,56 +1697,55 @@ def main():
         else:
             ref_df = None
 
-    # --- Streaming UMI dedup: process each library independently ---
-    print(f"\n  Streaming UMI dedup across libraries...")
-    lib_tasks = []
-    for i, lib in enumerate(cfg['libraries']):
-        lib_name = lib['sublibrary_name']
-        match_path = _resolve_match_path(output_dir, lib_name)
-        if match_path is None:
-            print(f"  WARNING: Match file not found for {lib_name}")
-            continue
-        lib_tasks.append((match_path, lib_name, lib['sample_name'], i))
-
-    if not lib_tasks:
-        raise FileNotFoundError("No match files found. Run Step 3 first.")
-
-    # Determine group cols from the first file's header
-    group_cols = _determine_group_cols(lib_tasks[0][0], dedup_ibar)
-    print(f"  Grouping by: {group_cols}")
-    print(f"  UMI error correction: {'directional (max_edits=' + str(max_umi_edits) + ')' if max_umi_edits > 0 else 'none (exact)'}")
-
-    all_deduped = []
-    lib_stats_all = {}
-
-    if args.ncpus > 1 and len(lib_tasks) > 1:
-        from multiprocessing import Pool
-        from functools import partial
-        _worker = partial(
-            _process_one_library,
-            group_cols=group_cols,
-            max_umi_edits=max_umi_edits,
-            min_reads_per_umi=min_reads_per_umi
-        )
-        with Pool(min(args.ncpus, len(lib_tasks))) as pool:
-            results = pool.map(_worker, lib_tasks)
-        for (deduped, stats), (_, lib_name, _, _) in zip(results, lib_tasks):
-            all_deduped.append(deduped)
-            lib_stats_all[lib_name] = stats
-    else:
-        for match_path, lib_name, sample_name, sublib_idx in lib_tasks:
-            deduped, stats = stream_library_umi_dedup(
-                match_path, lib_name, sample_name, sublib_idx,
-                group_cols=group_cols,
-                max_umi_edits=max_umi_edits,
-                min_reads_per_umi=min_reads_per_umi
+    if args.source_mode == 'auto':
+        modes = ['dedicated']
+        step1c_enabled = bool(step1c_cfg.get('enabled', False))
+        combine_enabled = bool(combine_cfg.get('enabled', False))
+        if combine_enabled and not step1c_enabled:
+            raise ValueError(
+                "combine_with_grna_arm.enabled requires step1c.enabled"
             )
-            all_deduped.append(deduped)
-            lib_stats_all[lib_name] = stats
+        if step1c_enabled:
+            modes.append('gex')
+        if combine_enabled:
+            if not combine_cfg.get('combine_before_umi_collapse', True):
+                raise ValueError(
+                    "Only combine_before_umi_collapse=true is supported"
+                )
+            modes.append('combined')
+    else:
+        modes = [args.source_mode]
 
-    # Concatenate small per-library deduped results
-    deduped_df = pd.concat(all_deduped, ignore_index=True)
-    del all_deduped  # free memory
+    products = {}
+    for mode in modes:
+        print(f"\n  Streaming {mode} UMI evidence across libraries...")
+        products[mode] = _stream_assignment_product(
+            cfg,
+            output_dir,
+            mode,
+            gex_namespace,
+            dedup_ibar,
+            max_umi_edits,
+            min_reads_per_umi,
+            args.ncpus,
+            ref_df,
+            available_cols if ref_df is not None else [],
+        )
+        _write_assignment_product(products[mode], output_dir, gex_namespace)
+
+    # The remaining historical QC products apply to the dedicated arm only.
+    if 'dedicated' not in products:
+        print(f"\n{'='*60}\n  Step 4 {modes[0]} product complete!\n{'='*60}")
+        return
+
+    dedicated = products['dedicated']
+    deduped_df = dedicated['deduped']
+    assignment_df = dedicated['assignment']
+    guide_matrix = dedicated['matrix']
+    cell_barcodes = dedicated['barcodes']
+    guide_names = dedicated['guides']
+    group_cols = dedicated['group_cols']
+    lib_stats_all = dedicated['lib_stats']
 
     total_reads = sum(s['total_reads'] for s in lib_stats_all.values())
     total_umis_raw = sum(s.get('total_umis_raw', 0) for s in lib_stats_all.values())
@@ -1144,52 +1761,7 @@ def main():
     print(f"    Unique cells:         {deduped_df['bc_wells'].nunique():>12,}")
     print(f"    Unique guides:        {deduped_df['grna_name'].nunique():>12,}")
 
-    ga = cfg['guide_assignment']
     dual_guide_counting_mode = ga.get('dual_guide_counting_mode', False)
-    
-    # Join design annotations onto deduped data
-    if ref_df is not None:
-        if dual_guide_counting_mode:
-            # Dual-guide mode: merge on BOTH grna_name and ibar_seq
-            ibar_cols = [c for c in group_cols if 'ibar' in c and c != 'ibar_seq_unresolved']
-            if not ibar_cols:
-                raise ValueError("dual_guide_counting_mode requires umi_dedup_ibar to be true")
-            ibar_col = ibar_cols[0]
-            
-            join_cols = [c for c in available_cols if c not in ['grna_name', 'ibar_seq']]
-            ref_annot = ref_df[available_cols + ['ibar_seq']].drop_duplicates()
-            deduped_df = deduped_df.merge(
-                ref_annot,
-                left_on=['grna_name', ibar_col],
-                right_on=['grna_name', 'ibar_seq'],
-                how='left'
-            )
-            print(f"\n  Joined dual-guide design annotations on grna_name + {ibar_col}: {join_cols}")
-        else:
-            join_cols = [c for c in available_cols if c != 'grna_name']
-            ref_annot = ref_df[available_cols].drop_duplicates(subset=['grna_name'])
-            deduped_df = deduped_df.merge(ref_annot, on='grna_name', how='left')
-            print(f"\n  Joined design annotations: {join_cols}")
-
-    # Cell-level assignment
-    if dual_guide_counting_mode:
-        ibar_col = [c for c in group_cols if 'ibar' in c and c != 'ibar_seq_unresolved'][0]
-        assignment_df = assign_dual_guide_pairs(
-            deduped_df,
-            ref_df=ref_df,
-            min_umi_threshold=ga['min_umi_threshold'],
-            ibar_col=ibar_col
-        )
-    else:
-        assignment_df = assign_single_guides(
-            deduped_df,
-            min_umi_threshold=ga['min_umi_threshold'],
-            multiplet_strategy=ga['multiplet_strategy'],
-            min_dominance_fraction=ga['min_dominance_fraction']
-        )
-
-    # Build guide UMI matrix
-    guide_matrix, cell_barcodes, guide_names = build_guide_umi_matrix(deduped_df)
 
     # Compute QC stats
     qc_stats = compute_qc_stats(
@@ -1202,32 +1774,7 @@ def main():
     assign_dir = os.path.join(output_dir, 'grna_assignment')
     os.makedirs(assign_dir, exist_ok=True)
 
-    # 1. Cell-level assignment CSV
-    assign_path = os.path.join(assign_dir, 'grna_cell_assignment.csv')
-    assignment_df.to_csv(assign_path, index=False)
-    print(f"\n  Saved assignment: {assign_path}")
-
-    # 2. UMI-deduplicated counts (all, before thresholding)
-    dedup_path = os.path.join(assign_dir, 'grna_umi_counts.csv.gz')
-    deduped_df.to_csv(dedup_path, index=False, compression='gzip')
-    print(f"  Saved UMI counts: {dedup_path}")
-
-    # 3. Guide UMI matrix (sparse MTX)
-    from scipy.io import mmwrite
-    mtx_path = os.path.join(assign_dir, 'grna_umi_matrix.mtx')
-    mmwrite(mtx_path, guide_matrix)
-    # Save barcodes and guide names
-    pd.Series(cell_barcodes).to_csv(
-        os.path.join(assign_dir, 'grna_matrix_barcodes.txt'),
-        index=False, header=False
-    )
-    pd.Series(guide_names).to_csv(
-        os.path.join(assign_dir, 'grna_matrix_guides.txt'),
-        index=False, header=False
-    )
-    print(f"  Saved matrix: {mtx_path}")
-
-    # 4. Guide annotation table (maps guide_name → design annotations)
+    # Guide annotation table (maps guide_name → design annotations)
     if ref_df is not None:
         annot_path = os.path.join(assign_dir, 'guide_annotations.csv')
         guide_annot = ref_df[available_cols].drop_duplicates()

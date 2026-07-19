@@ -2,6 +2,25 @@
 
 This document summarizes the Quality Control (QC) pipeline designed for the ccPerturbSeq dataset. The analysis is orchestrated via the `scripts/qc_analysis.ipynb` notebook and is divided into four major analytical modules (Q1–Q4).
 
+## Environment setup
+
+Q1–Q4, the GEX carry-over QC, and the analysis notebooks share the tracked
+`csm_analysis` environment:
+
+```bash
+conda env create -f environment_qc.yml
+# For an existing environment:
+conda env update -n csm_analysis -f environment_qc.yml --prune
+
+conda activate csm_analysis
+python3 -c 'import edlib, matplotlib, pandas, pysam, scanpy, scipy, yaml'
+```
+
+Set `qc_conda_env: "csm_analysis"` in QC configurations and set
+`environment.conda_prefix` in the referenced main config to the output of
+`conda info --base`. UGER wrappers activate this environment inside compute
+jobs; it does not need to remain activated on the login node.
+
 ---
 
 ## Q1: Bulk Guide-Seq Library Analysis (`qc_q1_guideseq.py`)

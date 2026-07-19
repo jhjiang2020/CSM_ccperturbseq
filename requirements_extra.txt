@@ -14,7 +14,7 @@
 # Required: configuration file parsing (may already be installed)
 pyyaml>=6.0
 
-# Strongly recommended: fast edit-distance alignment (~50x faster than pure Python)
-# Uses bit-parallel Myers algorithm (C implementation)
-# If not installed, scripts fall back to pure Python (much slower for large datasets)
+# Required when gex_decontamination.enabled is true. Step 1a fails fast without
+# this C-backed bit-parallel alignment implementation so a large run cannot
+# silently enter the rejected pure-Python performance path.
 edlib>=1.3

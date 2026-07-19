@@ -12,7 +12,7 @@
 #$ -l h_vmem=4G
 #$ -l h_rt=12:00:00
 #$ -pe smp 8
-#$ -o /medpop/rgupta/Jiahao/logs/CSM_ccperturbseq/q1_guideseq.$JOB_ID.log
+#$ -binding linear:8
 
 set -euo pipefail
 
@@ -22,16 +22,43 @@ if [[ -z "${CSM_QC_CONFIG:-}" ]]; then
     echo "  qsub -v CSM_QC_CONFIG=/abs/path/to/qc_config_guideseq.yaml submit/submit_q1_guideseq.sh"
     exit 1
 fi
-QC_CONFIG="${CSM_QC_CONFIG}"
-PROJECT_DIR="$(dirname "${QC_CONFIG}")"
+QC_CONFIG="$(cd "$(dirname "${CSM_QC_CONFIG}")" && pwd)/$(basename "${CSM_QC_CONFIG}")"
+_SC_CONFIG_VALUE=$(grep '^ *sc_config:' "${QC_CONFIG}" | head -1 | sed 's/.*: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/' || true)
+if [[ -n "${_SC_CONFIG_VALUE}" && "${_SC_CONFIG_VALUE}" != /* ]]; then
+    BASE_CONFIG="$(dirname "${QC_CONFIG}")/${_SC_CONFIG_VALUE}"
+else
+    BASE_CONFIG="${_SC_CONFIG_VALUE}"
+fi
+_CONFIG_PROJECT_DIR=""
+if [[ -n "${BASE_CONFIG}" && -r "${BASE_CONFIG}" ]]; then
+    _CONFIG_PROJECT_DIR=$(grep '^ *project_dir:' "${BASE_CONFIG}" | head -1 | sed 's/.*: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/' || true)
+fi
+PROJECT_DIR="${CSM_PROJECT_DIR:-${_CONFIG_PROJECT_DIR:-$(dirname "${QC_CONFIG}")}}"
 SCRIPTS_DIR="${PROJECT_DIR}/scripts"
 
-# Initialize conda
-eval "$($HOME/my-conda/condabin/conda shell.bash hook)"
-conda activate csm_analysis
+# Initialize the configured QC environment; no user-specific path/name fallback.
+_CONDA_PREFIX=$(grep '^ *qc_conda_prefix:' "${QC_CONFIG}" | head -1 | sed 's/.*: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/' || true)
+if [[ -z "${_CONDA_PREFIX}" && -n "${BASE_CONFIG}" && -r "${BASE_CONFIG}" ]]; then
+    _CONDA_PREFIX=$(grep '^ *conda_prefix:' "${BASE_CONFIG}" | head -1 | sed 's/.*: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/' || true)
+fi
+_QC_CONDA_ENV=$(grep '^ *qc_conda_env:' "${QC_CONFIG}" | head -1 | sed 's/.*: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/' || true)
+CONDA_ROOT="${_CONDA_PREFIX%/}"
+CONDA_ENV_NAME="${CSM_QC_ENV:-${_QC_CONDA_ENV}}"
+if [[ -z "${CONDA_ROOT}" || -z "${CONDA_ENV_NAME}" || ! -x "${CONDA_ROOT}/condabin/conda" ]]; then
+    echo "ERROR: Configure qc_conda_prefix (or sc_config environment.conda_prefix) and qc_conda_env" >&2
+    exit 1
+fi
+eval "$("${CONDA_ROOT}/condabin/conda" shell.bash hook)"
+conda activate "${CONDA_ENV_NAME}"
+PYTHON_BIN=$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)
+if [[ -z "${PYTHON_BIN}" ]] || ! "${PYTHON_BIN}" -c 'import edlib, matplotlib, numpy, pandas, tqdm, yaml' >/dev/null 2>&1; then
+    echo "ERROR: ${CONDA_ENV_NAME} is incomplete for Q1" >&2
+    echo "       Create/update it with: conda env update -n ${CONDA_ENV_NAME} -f environment_qc.yml --prune" >&2
+    exit 1
+fi
 
 # --- Log directory from base config ---
-LOG_DIR=$(python3 -c "
+LOG_DIR=$("${PYTHON_BIN}" -c "
 import yaml, os
 with open('${QC_CONFIG}') as f:
     qc = yaml.safe_load(f)
@@ -60,7 +87,7 @@ echo "  Logs:       ${LOG_DIR}"
 echo "=========================================="
 
 # --- Run ---
-python3 "${SCRIPTS_DIR}/qc_q1_guideseq.py" --config "${QC_CONFIG}" --n-workers "${NSLOTS:-8}"
+"${PYTHON_BIN}" "${SCRIPTS_DIR}/qc_q1_guideseq.py" --config "${QC_CONFIG}" --n-workers "${NSLOTS:-8}"
 
 echo ""
 echo "Q1 Guide-Seq QC complete: $(date)"

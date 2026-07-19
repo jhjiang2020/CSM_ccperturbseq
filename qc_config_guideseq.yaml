@@ -18,6 +18,11 @@
 # When absent or the file does not exist, Q1 runs fully standalone.
 sc_config: "config.yaml"
 
+# Read by the Q1 submitter; keep environment selection in configuration.
+# For a fully standalone config without sc_config, also set qc_conda_prefix to
+# the parent directory containing condabin/conda.
+qc_conda_env: "csm_analysis"
+
 # --- Paths ---
 paths:
   # Directory containing guide-seq bulk FASTQ files (R1/R2 pairs)

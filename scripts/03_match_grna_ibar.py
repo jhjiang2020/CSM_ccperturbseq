@@ -14,10 +14,13 @@ Alignment backend:
 
 R1 Read Structure (CROPseq-multi / Parse Biosciences):
   ┌───────────────────────────────────────────────────────────────────┐
-  │ variable (0-15bp) │ Split_TSO (30bp) │ gRNA │ stem │ iBAR │ tracr│
+  │ N7 random prefix  │ Split_TSO (30bp) │ gRNA │ stem │ iBAR │ tracr│
   └───────────────────────────────────────────────────────────────────┘
-  The TSO can start at a variable offset (most commonly ~7bp from R1 start).
-  We use semi-global alignment to find TSO position, then extract downstream.
+  In intact dedicated-gRNA reads the TSO starts at offset 7 after the N7 random
+  prefix. i7/i5 are separate index reads; no additional N3 R1 prefix is assumed.
+  GEX-derived guide reads start at offset 0. We use semi-global alignment to
+  tolerate damage/error and find the TSO endpoint before extracting downstream
+  sequence.
 
 Usage:
   python scripts/03_match_grna_ibar.py --config config.yaml
@@ -35,6 +38,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import yaml
+
+
+def resolve_output_root(output_dir, output_namespace=None):
+    """Resolve an optional source namespace, preserving historical defaults."""
+    if not output_namespace:
+        return Path(output_dir)
+    namespace = Path(output_namespace).expanduser()
+    return namespace if namespace.is_absolute() else Path(output_dir) / namespace
 
 # Try to import edlib for fast alignment
 try:
@@ -1308,6 +1319,16 @@ def main():
     parser.add_argument("--library", type=str, default=None)
     parser.add_argument("--n_processes", type=int, default=None)
     parser.add_argument("--chunk_size", type=int, default=100_000)
+    parser.add_argument(
+        "--barcode-input", default=None,
+        help=("Explicit barcode-evidence TSV for one library. Production Step 1c "
+              "passes the compact corrected-barcode evidence emitted by Step 1a."),
+    )
+    parser.add_argument(
+        "--output-namespace", default=None,
+        help=("Output root for this source. Relative paths are below paths.output_dir; "
+              "default keeps the historical output layout."),
+    )
     args = parser.parse_args()
 
     with open(args.config) as f:
@@ -1436,20 +1457,28 @@ def main():
     }
 
     libraries = cfg['libraries']
+    if args.barcode_input and not args.library and len(libraries) != 1:
+        print("ERROR: --barcode-input requires --library when config has multiple libraries")
+        sys.exit(1)
     if args.library:
         libraries = [lib for lib in libraries if lib['sublibrary_name'] == args.library]
         if not libraries:
             print(f"ERROR: Library '{args.library}' not found"); sys.exit(1)
 
-    output_dir = cfg['paths']['output_dir']
+    output_dir = str(resolve_output_root(
+        cfg['paths']['output_dir'], args.output_namespace
+    ))
     all_stats = {}
 
     for lib in libraries:
         lib_name = lib['sublibrary_name']
         # Support both .tsv.gz (preferred) and .tsv (legacy) input
-        barcode_tsv = os.path.join(output_dir, 'grna_barcodes', f"{lib_name}_barcodes.tsv.gz")
-        if not os.path.exists(barcode_tsv):
-            barcode_tsv = os.path.join(output_dir, 'grna_barcodes', f"{lib_name}_barcodes.tsv")
+        if args.barcode_input:
+            barcode_tsv = str(Path(args.barcode_input).expanduser().resolve())
+        else:
+            barcode_tsv = os.path.join(output_dir, 'grna_barcodes', f"{lib_name}_barcodes.tsv.gz")
+            if not os.path.exists(barcode_tsv):
+                barcode_tsv = os.path.join(output_dir, 'grna_barcodes', f"{lib_name}_barcodes.tsv")
         if not os.path.exists(barcode_tsv):
             print(f"\n  WARNING: {barcode_tsv} not found — run Step 2 first!")
             continue

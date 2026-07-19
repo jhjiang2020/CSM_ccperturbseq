@@ -1,6 +1,10 @@
 .agents/
+__pycache__/
+*.pyc
+/AGENTS.md
 fastq/
 output/
+output_v1_4_bamtest/
 ParseBiosciences-Pipeline.1.6.4/
 scripts/__pycache__/
 tmp/

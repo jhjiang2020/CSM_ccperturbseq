@@ -34,8 +34,10 @@ SCRIPTS_DIR="${PROJECT_DIR}/scripts"
 # --- Initialize conda (parsed from config via grep — no python3 needed yet) ---
 _CONDA_PREFIX=$(grep '^ *conda_prefix:' "${CONFIG}" | head -1 | sed 's/.*: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/')
 _CONDA_ENV=$(grep '^ *conda_env:' "${CONFIG}" | head -1 | sed 's/.*: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/')
-CONDA_PREFIX="${_CONDA_PREFIX:-$HOME/my-conda}"
-CONDA_ENV="${_CONDA_ENV:-splitpipe}"
+[[ -n "${_CONDA_PREFIX}" && -n "${_CONDA_ENV}" ]] || { echo "ERROR: Configure environment.conda_prefix and environment.conda_env" >&2; exit 1; }
+CONDA_PREFIX="${_CONDA_PREFIX}"
+CONDA_ENV="${_CONDA_ENV}"
+[[ -x "${CONDA_PREFIX}/condabin/conda" ]] || { echo "ERROR: Missing configured Conda: ${CONDA_PREFIX}/condabin/conda" >&2; exit 1; }
 eval "$(${CONDA_PREFIX}/condabin/conda shell.bash hook)"
 conda activate "${CONDA_ENV}"
 

@@ -20,7 +20,10 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import scanpy as sc
+try:
+    import scanpy as sc
+except ImportError:  # Keep sparse-matrix helpers testable outside the HPC env.
+    sc = None
 import yaml
 from scipy import io as sio
 from scipy import sparse
@@ -29,6 +32,125 @@ from scipy import sparse
 def load_config(config_path):
     with open(config_path) as f:
         return yaml.safe_load(f)
+
+
+def _guide_product_paths(output_dir, source, gex_namespace='gex_grna_identity'):
+    """Return the matrix/assignment paths for one Step 4 evidence product."""
+    assign_dir = Path(output_dir) / 'grna_assignment'
+    if source == 'dedicated':
+        return {
+            'assignment': assign_dir / 'grna_cell_assignment.csv',
+            'matrix': assign_dir / 'grna_umi_matrix.mtx',
+            'barcodes': assign_dir / 'grna_matrix_barcodes.txt',
+            'guides': assign_dir / 'grna_matrix_guides.txt',
+        }
+    if source == 'gex':
+        gex_dir = Path(output_dir) / gex_namespace / 'grna_assignment'
+        return {
+            'assignment': gex_dir / 'gex_grna_assignments.csv.gz',
+            'matrix': gex_dir / 'gex_grna_umi_matrix.mtx',
+            'barcodes': gex_dir / 'gex_grna_matrix_barcodes.txt',
+            'guides': gex_dir / 'gex_grna_matrix_guides.txt',
+        }
+    if source == 'combined':
+        return {
+            'assignment': assign_dir / 'grna_cell_assignment_combined.csv',
+            'matrix': assign_dir / 'grna_umi_matrix_combined.mtx',
+            'barcodes': assign_dir / 'grna_matrix_combined_barcodes.txt',
+            'guides': assign_dir / 'grna_matrix_combined_guides.txt',
+        }
+    raise ValueError(f"Unknown guide evidence source: {source}")
+
+
+def _read_guide_product(paths, required=True):
+    """Load a Step 4 cells-by-guides sparse matrix and its labels."""
+    required_paths = [paths['matrix'], paths['barcodes'], paths['guides']]
+    missing = [str(path) for path in required_paths if not Path(path).exists()]
+    if missing:
+        if not required:
+            return None
+        raise FileNotFoundError(
+            "Incomplete Step 4 guide matrix product:\n  " + "\n  ".join(missing)
+        )
+    matrix = sio.mmread(paths['matrix']).tocsr()
+    barcodes = Path(paths['barcodes']).read_text().splitlines()
+    guides = Path(paths['guides']).read_text().splitlines()
+    if matrix.shape != (len(barcodes), len(guides)):
+        raise ValueError(
+            f"Matrix/label shape mismatch for {paths['matrix']}: "
+            f"{matrix.shape} versus {len(barcodes)} x {len(guides)}"
+        )
+    return matrix, barcodes, guides
+
+
+def _align_guide_matrix(matrix, source_barcodes, target_barcodes):
+    """Sparse row reindexing without densifying individual guide rows."""
+    target_index = {barcode: idx for idx, barcode in enumerate(target_barcodes)}
+    source_to_target = np.fromiter(
+        (target_index.get(barcode, -1) for barcode in source_barcodes),
+        dtype=np.int64,
+        count=len(source_barcodes),
+    )
+    coo = matrix.tocoo()
+    mapped_rows = source_to_target[coo.row]
+    keep = mapped_rows >= 0
+    aligned = sparse.coo_matrix(
+        (coo.data[keep], (mapped_rows[keep], coo.col[keep])),
+        shape=(len(target_barcodes), matrix.shape[1]),
+    ).tocsr()
+    aligned.sum_duplicates()
+    return aligned
+
+
+def _attach_guide_matrix(adata, matrix, barcodes, guides, source, min_umi):
+    """Attach one source matrix under stable source-specific AnnData keys."""
+    aligned = _align_guide_matrix(matrix, barcodes, list(adata.obs.index))
+    suffix = '' if source == 'final' else f'_{source}'
+    adata.obsm[f'gRNA_counts{suffix}'] = aligned
+    adata.obsm[f'gRNA_assignment{suffix}'] = (
+        aligned >= min_umi
+    ).astype(np.int8)
+    adata.uns[f'gRNA_names{suffix}'] = list(guides)
+    return aligned
+
+
+def _assignment_comparison_table(assign_df):
+    """Compact per-cell metadata used to compare dedicated and union calls."""
+    if len(assign_df) == 0 or 'bc_wells' not in assign_df:
+        return pd.DataFrame()
+
+    dual_mode = 'detection_status' in assign_df.columns
+    aggregations = {}
+    if dual_mode:
+        first_cols = ('combo_type',)
+        string_cols = (
+            'detection_status', 'pair_id', 'target_combo', 'gi_pair',
+            'pos1_grna', 'pos2_grna',
+            'inferred_pos1_grna', 'inferred_pos2_grna',
+        )
+        sum_cols = ('pos1_umi', 'pos2_umi')
+        max_cols = ('n_combos',)
+    else:
+        first_cols = ('combo_type',)
+        string_cols = ('grna_name', 'target_gene', 'pair_id', 'target_combo')
+        sum_cols = ('umi_count',)
+        max_cols = ()
+
+    for col in first_cols:
+        if col in assign_df:
+            aggregations[col] = 'first'
+    for col in string_cols:
+        if col in assign_df:
+            aggregations[col] = lambda values: ','.join(
+                sorted(values.dropna().astype(str).unique())
+            )
+    for col in sum_cols:
+        if col in assign_df:
+            aggregations[col] = 'sum'
+    for col in max_cols:
+        if col in assign_df:
+            aggregations[col] = 'max'
+    return assign_df.groupby('bc_wells').agg(aggregations)
 
 
 def load_sample_gex(output_dir, sample_name, sublibs_info):
@@ -129,9 +251,26 @@ def main():
     parser.add_argument("--config", required=True, help="Path to config.yaml")
     args = parser.parse_args()
 
+    if sc is None:
+        raise ImportError(
+            "scanpy is required to build combined_adata.h5ad. "
+            "Load the pipeline Python environment before running Step 5."
+        )
+
     cfg = load_config(args.config)
     output_dir = cfg['paths']['output_dir']
     assign_dir = os.path.join(output_dir, 'grna_assignment')
+    decontam = cfg.get('gex_decontamination', {})
+    step1c_cfg = decontam.get('step1c', {})
+    combine_cfg = decontam.get('combine_with_grna_arm', {})
+    gex_namespace = step1c_cfg.get(
+        'output_namespace', 'gex_grna_identity'
+    )
+    combined_calls = bool(combine_cfg.get('enabled', False))
+    final_guide_source = 'combined' if combined_calls else 'dedicated'
+    final_product_paths = _guide_product_paths(
+        output_dir, final_guide_source, gex_namespace
+    )
 
     print(f"\n{'='*60}")
     print(f"  Step 5: Build Combined AnnData")
@@ -175,23 +314,24 @@ def main():
 
     # --- 2. Load gRNA cell assignments ---
     print("\n  2. Loading gRNA assignments...")
-    assign_path = os.path.join(assign_dir, 'grna_cell_assignment.csv')
-    if not os.path.exists(assign_path):
-        raise FileNotFoundError(f"Assignment file not found: {assign_path}\nRun Step 4 first.")
+    assign_path = final_product_paths['assignment']
+    if not assign_path.exists():
+        raise FileNotFoundError(
+            f"Assignment file not found: {assign_path}\n"
+            f"Run Step 4 {final_guide_source} assignment first."
+        )
 
     assign_df = pd.read_csv(assign_path)
+    print(f"     Final guide-call source: {final_guide_source}")
     print(f"     Loaded {len(assign_df):,} assignments for "
           f"{assign_df['bc_wells'].nunique():,} cells")
 
     # --- 3. Load gRNA UMI matrix ---
     print("\n  3. Loading gRNA UMI matrix...")
-    mtx_path = os.path.join(assign_dir, 'grna_umi_matrix.mtx')
-    barcodes_path = os.path.join(assign_dir, 'grna_matrix_barcodes.txt')
-    guides_path = os.path.join(assign_dir, 'grna_matrix_guides.txt')
-
-    guide_matrix = sio.mmread(mtx_path).tocsr()
-    guide_barcodes = pd.read_csv(barcodes_path, header=None)[0].tolist()
-    guide_names = pd.read_csv(guides_path, header=None)[0].tolist()
+    guide_matrix, guide_barcodes, guide_names = _read_guide_product(
+        final_product_paths, required=True
+    )
+    n_guides = len(guide_names)
     print(f"     Matrix: {guide_matrix.shape[0]:,} cells × {guide_matrix.shape[1]:,} guides")
 
     # --- 4. Match cell barcodes between GEX and gRNA ---
@@ -299,6 +439,25 @@ def main():
         )
         adata.obs['has_grna'] = adata.obs['target_gene'] != 'unassigned'
 
+    if combined_calls:
+        dedicated_assignment_path = _guide_product_paths(
+            output_dir, 'dedicated', gex_namespace
+        )['assignment']
+        if not dedicated_assignment_path.exists():
+            raise FileNotFoundError(
+                "Combined calls are enabled, but the dedicated comparison "
+                f"assignment is missing: {dedicated_assignment_path}"
+            )
+        dedicated_assign_df = pd.read_csv(dedicated_assignment_path)
+        dedicated_comparison = _assignment_comparison_table(
+            dedicated_assign_df
+        ).add_prefix('dedicated_')
+        adata.obs = adata.obs.join(dedicated_comparison, how='left')
+        print(
+            "     Preserved dedicated-only call metadata in "
+            "adata.obs['dedicated_*'] columns"
+        )
+
     print(f"     Cells with gRNA: {adata.obs['has_grna'].sum():,} "
           f"({adata.obs['has_grna'].mean()*100:.1f}%)")
     print(f"     Target gene/combo distribution:")
@@ -309,41 +468,40 @@ def main():
     # --- 6. Add gRNA UMI count matrix to obsm ---
     print("\n  6. Adding gRNA UMI matrix to obsm...")
 
-    # Build a matrix aligned to adata.obs.index
-    guide_bc_to_idx = {bc: i for i, bc in enumerate(guide_barcodes)}
-    n_cells = adata.n_obs
-    n_guides = len(guide_names)
-
-    aligned_rows = []
-    aligned_data = []
-    aligned_cols = []
-
-    for i, bc in enumerate(adata.obs.index):
-        if bc in guide_bc_to_idx:
-            j = guide_bc_to_idx[bc]
-            row = guide_matrix[j]
-            if sparse.issparse(row):
-                row = row.toarray().flatten()
-            else:
-                row = np.asarray(row).flatten()
-            nz = np.nonzero(row)[0]
-            for col_idx in nz:
-                aligned_rows.append(i)
-                aligned_cols.append(col_idx)
-                aligned_data.append(row[col_idx])
-
-    aligned_matrix = sparse.csr_matrix(
-        (aligned_data, (aligned_rows, aligned_cols)),
-        shape=(n_cells, n_guides)
-    )
-    adata.obsm['gRNA_counts'] = aligned_matrix
-
-    # Store guide names as unstructured data
-    adata.uns['gRNA_names'] = guide_names
-
-    # Binary assignment (threshold-based)
     min_umi = cfg['guide_assignment']['min_umi_threshold']
-    adata.obsm['gRNA_assignment'] = (aligned_matrix >= min_umi).astype(np.int8)
+    aligned_matrix = _attach_guide_matrix(
+        adata,
+        guide_matrix,
+        guide_barcodes,
+        guide_names,
+        source='final',
+        min_umi=min_umi,
+    )
+
+    # Preserve inspectable source matrices. Combined calls remain the primary
+    # unsuffixed keys only when explicitly enabled in config.
+    optional_sources = []
+    if combined_calls:
+        optional_sources.extend(('dedicated', 'gex', 'combined'))
+    elif step1c_cfg.get('enabled', False):
+        optional_sources.append('gex')
+    for source in optional_sources:
+        product = _read_guide_product(
+            _guide_product_paths(output_dir, source, gex_namespace),
+            required=(source != 'gex' or combined_calls),
+        )
+        if product is None:
+            print(f"     WARNING: Optional {source} guide matrix not found")
+            continue
+        source_matrix, source_barcodes, source_guides = product
+        _attach_guide_matrix(
+            adata,
+            source_matrix,
+            source_barcodes,
+            source_guides,
+            source=source,
+            min_umi=min_umi,
+        )
 
     print(f"     gRNA_counts shape: {aligned_matrix.shape}")
     print(f"     Non-zero entries: {aligned_matrix.nnz:,}")
@@ -361,6 +519,9 @@ def main():
         'ibar_length': cfg['grna_structure']['ibar_length'],
         'n_libraries': len(cfg['libraries']),
         'library_names': [lib['sublibrary_name'] for lib in cfg['libraries']],
+        'guide_call_source': final_guide_source,
+        'combined_source_used_for_final_calls': combined_calls,
+        'gex_identity_namespace': gex_namespace,
     }
 
     # Library metadata (must convert int keys to strings for h5ad serialization)

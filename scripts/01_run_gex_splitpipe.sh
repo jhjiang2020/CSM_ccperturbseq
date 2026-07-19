@@ -28,6 +28,18 @@ if [[ -z "$CONFIG_FILE" ]]; then
     exit 1
 fi
 
+# v1.4 safety: this historical sequential driver called split-pipe directly
+# and would bypass the preprocessing hook, Step 1c, manifest validation, and
+# existing-BAM sandbox. Delegate to the config-driven UGER orchestrator.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PIPELINE_SUBMIT="$(dirname "${SCRIPT_DIR}")/submit/submit_pipeline.sh"
+DELEGATE_ARGS=(--config "${CONFIG_FILE}" --step 1)
+if [[ "${DRY_RUN}" == true ]]; then
+    DELEGATE_ARGS+=(--dry-run)
+fi
+echo "NOTE: scripts/01_run_gex_splitpipe.sh is deprecated in v1.4; delegating to submit_pipeline.sh."
+exec bash "${PIPELINE_SUBMIT}" "${DELEGATE_ARGS[@]}"
+
 # --- Read config with Python (handles YAML properly) ---
 read_config() {
     python3 -c "
