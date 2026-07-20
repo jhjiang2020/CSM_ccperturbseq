@@ -205,7 +205,7 @@ reference/settings hashes, and a compact valid-positive barcode-evidence TSV.
 Fresh v1.4 setup and the complete decontamination configuration now live in the
 [v1.4 GEX decontamination guide](docs/GEX_DECONTAMINATION_V1_4.md#fresh-v14-fastq-start).
 For short-read experiments, use the consolidated
-[100-cycle v1.4 configuration](docs/ILLUMINA_100_CYCLE_SEQUENCING.md#fresh-v14-short-read-gex-decontamination)
+[100-cycle scenario guide](docs/ILLUMINA_100_CYCLE_SEQUENCING.md#choose-the-scenario)
 instead of copying a long-read configuration.
 
 ## v1.4 migration after a successful v1.3-or-earlier Step 1

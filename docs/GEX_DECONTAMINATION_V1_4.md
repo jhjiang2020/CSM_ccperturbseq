@@ -84,7 +84,7 @@ receive the v1.4 trimming policy and then proceed through human STAR. Keep
 Step 1c and guide-arm merging disabled until the identity-recovery criteria in
 [Configuration](#configuration) are appropriate for the actual R1 length. For
 a 100-cycle run, use the specific
-[short-read configuration](ILLUMINA_100_CYCLE_SEQUENCING.md#fresh-v14-short-read-gex-decontamination).
+[short-read scenario guide](ILLUMINA_100_CYCLE_SEQUENCING.md#choose-the-scenario).
 
 The supplied submission wrappers target the Broad Institute's UGER cluster.
 From a Broad login node, verify the resolved array, binding, memory, runtime,
