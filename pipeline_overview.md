@@ -4,6 +4,13 @@ For installation, configuration, UGER submission, monitoring, output paths,
 and v1.4 migration, start with the [README](README.md). This page describes
 the processing architecture only.
 
+The repository expects a Parse Biosciences-provided split-pipe 1.6.4 source
+tree at `paths.splitpipe_dir`; it does not provide that vendor distribution.
+The supplied submission wrappers are designed for the Broad Institute's UGER
+cluster. An example project layout, including a locally obtained Parse copy, is
+available at `/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq` for Broad users with
+access. Other schedulers require an adapted submission layer.
+
 ## Production data flow
 
 ```mermaid

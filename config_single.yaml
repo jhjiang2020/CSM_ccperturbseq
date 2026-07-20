@@ -91,7 +91,8 @@ splitpipe:
   chemistry: "v3"
   # Well range for sample assignment (e.g., "A1-A12", "A1-B12")
   sample_wells: "A1-B12"
-  # Number of parallel threads for split-pipe
+  # Compatibility field retained for older configs. Production UGER Step 1a uses
+  # uger.step1a.slots and passes the allocated NSLOTS to split-pipe.
   threads: 16
   # Memory limit in GB for split-pipe
   memory_gb: 64

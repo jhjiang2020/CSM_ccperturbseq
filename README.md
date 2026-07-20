@@ -14,8 +14,29 @@ covered by the [operating guide](docs/GEX_DECONTAMINATION_V1_4.md) and
 
 ### 1. Install the production environment
 
-Parse split-pipe 1.6.4 requires Python 3.12.8 or newer. From the repository
-root:
+This repository does not provide the Parse split-pipe source. Obtain split-pipe
+1.6.4 directly from Parse Biosciences and extract it beside this repository's
+scripts under the expected directory name:
+
+```text
+CSM_ccperturbseq/
+├── ParseBiosciences-Pipeline.1.6.4/
+│   ├── split-pipe
+│   ├── splitpipe/
+│   ├── setup.py
+│   ├── install_dependencies_conda.sh
+│   └── install_dependencies.sh
+├── scripts/
+└── submit/
+```
+
+An example Broad project tree, including a locally obtained copy of the Parse
+distribution, is available at
+`/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq`. Access to that example does not
+replace obtaining and accepting the Parse software through Parse Biosciences
+for a new installation.
+
+Parse split-pipe 1.6.4 requires Python 3.12.8 or newer. From the project root:
 
 ```bash
 conda create -n splitpipe python=3.12.8
@@ -54,6 +75,11 @@ environment:
   conda_env: "splitpipe"
 ```
 
+The scripts under `submit/` are written specifically for the Broad Institute's
+UGER environment: they use `qsub`, the `broad` queue, UGER job arrays and
+dependencies, and Broad linear core binding. On another scheduler, retain the
+pipeline scripts but translate the submission layer and resource directives.
+
 ### 2. Configure inputs
 
 Copy the closest public configuration and edit the copy:
@@ -80,36 +106,75 @@ uger:
 ```
 
 Large or multi-lane GEX inputs should retain the 48-hour limit. More than 16
-slots is not normally useful: Parse preprocessing uses at most eight workers
-in this setup. Every multi-slot wrapper requests matching SMP and linear core
-binding, and workers derive their count from `NSLOTS`.
+slots showed no benefit in the release benchmark, but 16 is not a hardcoded
+pipeline ceiling. `submit_pipeline.sh` validates `uger.step1a.slots`, requests
+the same number with `-pe smp` and `-binding linear`, and Step 1a passes the
+allocated `NSLOTS` to split-pipe as `--nthreads`. Users can raise or lower
+`slots` in YAML and inspect the resolved request with `--dry-run`.
+
+The reason to keep 16 as the default is measured diminishing return: Parse
+1.6.4 internally caps its preprocessing/barcode-correction worker pool at
+eight (`pre_num_multiproc=8`), and the full-C2 run averaged about 5.2 cores.
+STAR, sorting, and later split-pipe work may use more of the allocation, so a
+different dataset can justify a measured override. More slots also reserve
+more total memory because `memory_per_slot_gb` is per slot. The legacy
+`splitpipe.threads` config field does not control the current UGER Step 1a
+wrapper; `uger.step1a.slots` is authoritative.
 
 ### 3. Initialize UGER and dry-run
 
-On a Broad login node:
+On a Broad login node, set the project and config paths once, initialize UGER,
+and inspect the complete submission before running it:
 
 ```bash
+PROJECT_DIR=/medpop/rgupta/Jiahao/path/to/CSM_ccperturbseq
+cd "${PROJECT_DIR}"
+CONFIG="$(realpath my_project.yaml)"
+
 source /broad/software/scripts/useuse
 reuse -q UGER || true
 command -v qsub
 
-bash submit/submit_pipeline.sh \
-  --config "$(realpath my_project.yaml)" --dry-run
+bash submit/submit_pipeline.sh --config "${CONFIG}" --dry-run
 ```
 
 Heavy commands, including split-pipe, must run through `qsub`. The dry run
 prints the exact resource, binding, dependency, config, and log arguments.
+The config passed through `qsub` must be an absolute HPC path: use `realpath`
+as above or assign the full `/medpop/rgupta/Jiahao/...` path. A bare relative
+`my_project.yaml` will not resolve reliably on a compute node. Run the dry-run
+again whenever the config or requested step set changes.
 
 ### 4. Submit and monitor
 
+To submit Steps 1–5 as one dependency graph:
+
 ```bash
-# All production steps
-bash submit/submit_pipeline.sh --config "$(realpath my_project.yaml)"
+bash submit/submit_pipeline.sh --config "${CONFIG}" --dry-run
+bash submit/submit_pipeline.sh --config "${CONFIG}"
+```
 
-# Selected steps
-bash submit/submit_pipeline.sh \
-  --config "$(realpath my_project.yaml)" --step 1
+To submit only one step or a comma-separated set, use the same selector for the
+dry run and production submission. Prerequisite outputs for omitted steps must
+already be complete.
 
+```bash
+# Step 1a/1b and optional Step 1c only
+bash submit/submit_pipeline.sh --config "${CONFIG}" --step 1 --dry-run
+bash submit/submit_pipeline.sh --config "${CONFIG}" --step 1
+
+# Dedicated-guide extraction, matching, and assignment only
+bash submit/submit_pipeline.sh --config "${CONFIG}" --step 2,3,4 --dry-run
+bash submit/submit_pipeline.sh --config "${CONFIG}" --step 2,3,4
+
+# Rebuild assignment and final AnnData from completed upstream products
+bash submit/submit_pipeline.sh --config "${CONFIG}" --step 4,5 --dry-run
+bash submit/submit_pipeline.sh --config "${CONFIG}" --step 4,5
+```
+
+Monitor and inspect accounting separately:
+
+```bash
 qstat -u "$USER"
 qacct -j JOB_ID
 tail -f /path/to/logs/step1a_gex.JOB_ID.TASK_ID.log
@@ -137,65 +202,92 @@ The Step 1a schema-4 completion manifest records the synchronized rejected
 R1/R2 hashes and counts, ordered read-ID digest, exact FASTQ identities,
 reference/settings hashes, and a compact valid-positive barcode-evidence TSV.
 
-## v1.4 quick start for a fresh run
-
-Enable the pre-STAR filter while leaving identity recovery opt-in:
-
-```yaml
-gex_decontamination:
-  enabled: true
-  integration: "splitpipe_pre_router"
-  tso_matching:
-    backend: "edlib"
-  io:
-    write_rejected_raw_pairs: true
-  step1c:
-    enabled: false
-    strict_matching:
-      enabled: true
-      max_guide_edit_distance: 1
-      max_ibar_edit_distance: 1
-      require_resolved_ibar_in_dual_mode: true
-      reject_ibar_decoupled: true
-  combine_with_grna_arm:
-    enabled: false
-```
-
-Step 1a removes only reference-supported TSO–guide reads. It stores full
-paired positives by default because the observed C2 burden was only about 30
-per million reads. Filter-negative full/fuzzy-TSO reads are trimmed at the
-detected full TSO endpoint; reads without one retain Parse’s exact-17-mer
-fallback.
-
-Optional Step 1c does **not** rescan the GEX FASTQs or recalibrate barcodes. It
-runs ordinary Step 3 only on Step 1a’s small valid-positive evidence table.
-The default job therefore requests one core; if a caller allocates more slots,
-Step 1c starts at most one worker per 100,000-row chunk and never starts idle
-workers.
-The unfiltered Step 3 result is retained, while conservative configurable
-guide/iBAR thresholds determine which rows may augment the guide matrix. The
-release defaults accept edit distance at most one and, in dual-guide mode,
-require a resolved, guide-compatible corrected iBAR; decoupled guide/iBAR calls
-are rejected. This intentionally favors specificity over recovery because the
-optional arm can only add guide UMIs.
+Fresh v1.4 setup and the complete decontamination configuration now live in the
+[v1.4 GEX decontamination guide](docs/GEX_DECONTAMINATION_V1_4.md#fresh-v14-fastq-start).
+For short-read experiments, use the consolidated
+[100-cycle v1.4 configuration](docs/ILLUMINA_100_CYCLE_SEQUENCING.md#fresh-v14-short-read-gex-decontamination)
+instead of copying a long-read configuration.
 
 ## v1.4 migration after a successful v1.3-or-earlier Step 1
 
-Do not edit or overwrite the old run. Copy its configuration and select a new
-output root:
+Do not edit or overwrite the old run. The v1.4 runtime overlay, Step 1c, and
+manifest checks require updated code; changing only the old YAML is not
+sufficient.
+
+### Update the v1.3 code and environment
+
+The preferred route is to preserve the old config, update a clean project
+checkout to the v1.4 release, and copy the config under a new name:
 
 ```bash
-cp old_project.yaml old_project.v1_4.yaml
+PROJECT_DIR=/medpop/rgupta/Jiahao/path/to/CSM_ccperturbseq
+cd "${PROJECT_DIR}"
+git status --short
+git pull --ff-only
+
+cp /medpop/rgupta/Jiahao/path/to/old_project.yaml \
+   /medpop/rgupta/Jiahao/path/to/old_project.v1_4.yaml
 conda activate splitpipe
 python -m pip install -r requirements_extra.txt
+python -c 'import edlib, pandas, pysam, splitpipe, yaml'
 ```
 
-Add `uger.step1a` and `gex_decontamination`, then configure the historical BAM
-route:
+If `git pull` is not possible, replace the v1.3 Step 1 runtime as one unit; do
+not copy only the filter module. The minimum v1.4 set is:
+
+```text
+requirements_extra.txt
+patches/parsebio_splitpipe_1.6.4_gex_decontamination.patch
+submit/submit_pipeline.sh
+submit/submit_step1a_gex_array.sh
+submit/submit_step1b_gex_combine.sh
+submit/submit_step1c_gex_grna_array.sh
+submit/submit_step1c_gex_grna_aggregate.sh
+scripts/01_run_gex_splitpipe.sh
+scripts/01c_process_gex_grna.py
+scripts/03_match_grna_ibar.py
+scripts/04_assign_grna_to_cells.py
+scripts/gex_grna_bam_filter.py
+scripts/gex_grna_filter.py
+scripts/gex_grna_preprocess_hook.py
+scripts/splitpipe_gex_wrapper.py
+scripts/splitpipe_wrapper.py
+scripts/uger_resources.py
+scripts/validate_gex_filter_manifests.py
+scripts/validate_step1c_manifests.py
+scripts/write_fastq_input_identity.py
+```
+
+Also replace `submit/submit_step4_assign.sh`,
+`submit/submit_step5_anndata.sh`, and `scripts/05_build_anndata.py` before using
+the optional GEX/dedicated-guide merge. Replace
+`submit/submit_step2_barcodes.sh`, `submit/submit_step3_match.sh`, and
+`scripts/02_extract_grna_barcodes.py` as well if the dedicated arm will be
+rerun. A full release checkout is safer than maintaining this manual file set.
+
+### Migrate the v1.3 configuration
+
+In the copied YAML, verify `environment.conda_prefix` and
+`environment.conda_env: splitpipe`. Keep the existing `libraries`, FASTQ paths,
+Parse kit/chemistry, guide structure, and guide reference, but update:
+
+- `paths.project_dir` and `paths.splitpipe_dir` to the v1.4 checkout and its
+  pristine `ParseBiosciences-Pipeline.1.6.4` tree;
+- `paths.output_dir` and `paths.log_dir` to new v1.4 locations;
+- `uger.step1a` with the new bound resource controls;
+- the complete `gex_decontamination` section from `config_dual.yaml` or
+  `config_single.yaml`, using the canonical `splitpipe_pre_router` integration;
+- `existing_alignment.source_output_dir_template` to the old read-only Step 1
+  output, and its sandbox template to the new output root.
+
+The essential historical-BAM settings are:
 
 ```yaml
 paths:
-  output_dir: "/new/project/output_v1_4"
+  project_dir: "/medpop/rgupta/Jiahao/path/to/CSM_ccperturbseq"
+  splitpipe_dir: "/medpop/rgupta/Jiahao/path/to/CSM_ccperturbseq/ParseBiosciences-Pipeline.1.6.4"
+  output_dir: "/medpop/rgupta/Jiahao/path/to/output_v1_4"
+  log_dir: "/medpop/rgupta/Jiahao/path/to/logs_v1_4"
 
 uger:
   step1a:
@@ -205,24 +297,84 @@ uger:
 
 gex_decontamination:
   enabled: true
+  integration: "splitpipe_pre_router"
+  tso_matching:
+    backend: "edlib"
+  step1c:
+    enabled: false
+  combine_with_grna_arm:
+    enabled: false
   existing_alignment:
     enabled: true
-    source_output_dir_template: "/old/read_only/output/gex_{library}"
+    source_output_dir_template: "/medpop/rgupta/Jiahao/path/to/old_output/gex_{library}"
     sandbox_output_dir_template: "{output_dir}/gex_{library}_v1_4"
 ```
 
-Verify and submit only Step 1:
+Copy the remaining matching, I/O, and strict-threshold fields from the matching
+public v1.4 config rather than relying on implicit values. The old raw FASTQs
+must still be readable: the sandbox route scans them once to reproduce the
+pre-STAR decisions, but reuses the old aligned BAM and does not rerun STAR.
+
+### Start decontamination of the existing Step 1 run
+
+On the Broad login node, dry-run the exact Step 1 migration before submitting:
 
 ```bash
-bash submit/submit_pipeline.sh \
-  --config "$(realpath old_project.v1_4.yaml)" --step 1 --dry-run
-bash submit/submit_pipeline.sh \
-  --config "$(realpath old_project.v1_4.yaml)" --step 1
+PROJECT_DIR=/medpop/rgupta/Jiahao/path/to/CSM_ccperturbseq
+CONFIG=/medpop/rgupta/Jiahao/path/to/old_project.v1_4.yaml
+cd "${PROJECT_DIR}"
+
+source /broad/software/scripts/useuse
+reuse -q UGER || true
+command -v qsub
+
+bash submit/submit_pipeline.sh --config "${CONFIG}" --step 1 --dry-run
+bash submit/submit_pipeline.sh --config "${CONFIG}" --step 1
 ```
 
 This sandbox route avoids rerunning human STAR and never modifies the source
 BAM. It cannot retroactively apply v1.4’s improved full/fuzzy-TSO trimming to
 surviving reads; use a fresh Step 1/STAR run when that change matters.
+
+### Optional Step 1c and guide-arm integration
+
+Step 1c is a conservative identity-recovery option, not part of required GEX
+decontamination. It reads only the compact corrected-barcode evidence written
+by Step 1a, so it does not rescan the full GEX FASTQs. Enable
+`gex_decontamination.step1c.enabled: true` before the Step 1 submission if the
+GEX R1 is long enough to resolve the required guide and, for a dual design,
+iBAR. Keep it disabled for 54–60-nt dual-guide/iBAR R1, where complete construct
+identity is not observed.
+
+First leave `combine_with_grna_arm.enabled: false`, run Step 1, and inspect the
+GEX-only products under `gex_grna_identity/`. To add accepted GEX guide evidence
+to the dedicated-guide arm, set both Step 1c and
+`combine_with_grna_arm.enabled` to true and keep
+`combine_before_umi_collapse: true`.
+
+Because the migration deliberately uses a new `paths.output_dir`, that new
+namespace must contain complete dedicated Step 3 products before merging. The
+safest route is to rerun the much smaller dedicated Steps 2 and 3 there:
+
+```bash
+bash submit/submit_pipeline.sh --config "${CONFIG}" --step 2,3 --dry-run
+bash submit/submit_pipeline.sh --config "${CONFIG}" --step 2,3
+```
+
+After Step 1c and dedicated Step 3 are complete, rebuild Steps 4 and 5:
+
+```bash
+bash submit/submit_pipeline.sh --config "${CONFIG}" --step 4,5 --dry-run
+bash submit/submit_pipeline.sh --config "${CONFIG}" --step 4,5
+```
+
+This standalone Step 4 reads the existing dedicated Step 3 and Step 1c
+products, preserves dedicated-only and GEX-only matrices, combines source reads
+before read-depth filtering and directional UMI collapse, and counts an exact
+cross-source UMI once. A verified copy of old dedicated Step 3 products may be
+used instead, but do not make the new output root writable over the historical
+production run. For a wholly new run, enabling both options and submitting all
+steps creates the required dependency chain automatically.
 
 ## GEX carry-over QC quick start
 

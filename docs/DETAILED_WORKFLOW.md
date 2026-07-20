@@ -2,7 +2,7 @@
 
 This document describes each processing stage, its inputs and outputs, matching
 and assignment decisions, and the UGER dependency graph. For setup and
-submission commands, begin with the [quick start](../pipeline_overview.md).
+submission commands, begin with the [README quick start](../README.md#quick-start).
 Versioned behavior changes are tracked in the [release notes](../RELEASE_NOTES.md),
 and operational details for GEX decontamination are in the
 [v1.4 guide](GEX_DECONTAMINATION_V1_4.md). Read-recipe constraints and matching
@@ -10,6 +10,10 @@ configurations are summarized in the
 [100-cycle Illumina sequencing note](ILLUMINA_100_CYCLE_SEQUENCING.md).
 
 ## UGER Job Dependency Chain
+
+The supplied `submit/` wrappers and the graph below target the Broad
+Institute's UGER cluster. The processing stages are reusable elsewhere, but
+another scheduler requires a translated submission and dependency layer.
 
 ```mermaid
 flowchart TD
@@ -447,7 +451,7 @@ Key sections of [config.yaml](../config.yaml):
 |---|---|---|---|---|
 | 1a (GEX) | 8GB/slot (128GB at default) | 16 | 48h | Array ×N |
 | 1b (Combine) | 16GB/slot | 4 | 4h | Single |
-| 1c (optional match) | 4GB/slot | 8 | 12h | Array ×N |
+| 1c (optional match) | 4GB/slot | 1 | 12h | Array ×N |
 | 1c (optional aggregate) | 32GB/slot | 4 | 8h | Single |
 | 2 (Barcodes) | 4GB | 1 | 12h | Array ×N |
 | 3 (Matching) | 4GB/slot | 8 | 12h | Array ×N |
@@ -457,12 +461,17 @@ Key sections of [config.yaml](../config.yaml):
 Step 1a values come from `uger.step1a.slots`,
 `uger.step1a.memory_per_slot_gb`, and `uger.step1a.runtime_hours`. The launcher
 uses the slot count for both `-pe smp` and `-binding linear`, and split-pipe
-derives its thread count from `NSLOTS`.
+derives its thread count from `NSLOTS`. The slot count is configurable rather
+than hardcoded; the legacy `splitpipe.threads` field is not the current UGER
+Step 1a resource control.
 
 The 48-hour default is recommended for large or multi-lane GEX inputs. Verify
 the resolved `-pe`, `-binding`, `h_vmem`, and `h_rt` values with
-`submit/submit_pipeline.sh --dry-run`. More than 16 slots is not recommended:
-the full-C2 evidence used eight Parse workers, averaged about 5.2 cores, and
-already had ample memory headroom.
+`submit/submit_pipeline.sh --dry-run`. Sixteen is the recommended starting
+point because Parse 1.6.4 caps preprocessing at eight workers, the full-C2 job
+averaged about 5.2 cores, and memory had ample headroom. Users may change the
+slot count when STAR or another phase benefits on their workload; confirm that
+with UGER accounting and remember that total reserved memory scales with
+slots.
 
 ---

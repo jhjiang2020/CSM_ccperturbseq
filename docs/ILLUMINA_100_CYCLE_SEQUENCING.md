@@ -157,9 +157,13 @@ corrected-barcode evidence emitted during Step 1a. These settings do not
 override split-pipe's GEX gates: raw GEX R1 must be >=45 and chemistry-v3 R2
 must be >=58.
 
-### Short GEX with dual-guide contamination removal
+### Fresh v1.4 short-read GEX decontamination
 
-For a fresh 54/64 or 60/58 GEX run using the current dual-guide reference:
+For a fresh 54/64 or 60/58 GEX run using the current dual-guide reference,
+obtain a pristine split-pipe 1.6.4 distribution from Parse Biosciences, copy
+`config_dual.yaml` to a new project config, and use the following sections. This
+is a fresh FASTQ/STAR route, not the historical-BAM migration described in the
+[README](../README.md#v14-migration-after-a-successful-v13-or-earlier-step-1).
 
 ```yaml
 grna_structure:
@@ -224,8 +228,32 @@ failure rate are expected; such evidence must not be merged into final calls.
 Enabling Step 1c does not trigger a second full FASTQ scan: only Step 1a's
 valid-positive evidence rows are examined.
 The 48-hour Step 1a limit is recommended for large or multi-lane GEX inputs and
-can be changed in YAML. More cores are not a substitute for matcher efficiency:
-Parse preprocessing uses eight workers in the tested configuration.
+can be changed in YAML. The slot count is also configurable: the Broad UGER
+launcher requests `uger.step1a.slots`, binds the same number of cores, and
+passes `NSLOTS` to split-pipe. Sixteen remains the evidence-based default
+because Parse 1.6.4 caps its preprocessing pool at eight workers and the
+full-C2 job averaged about 5.2 cores. A larger allocation may help other
+split-pipe phases on a different workload, but should be verified with UGER
+accounting; it also increases total reserved memory because memory is per slot.
+
+After completing the rest of the paths, libraries, reference, and environment
+settings, dry-run and submit the fresh Step 1 on a Broad login node:
+
+```bash
+PROJECT_DIR=/medpop/rgupta/Jiahao/path/to/CSM_ccperturbseq
+CONFIG=/medpop/rgupta/Jiahao/path/to/my_100_cycle_v1_4.yaml
+cd "${PROJECT_DIR}"
+
+source /broad/software/scripts/useuse
+reuse -q UGER || true
+command -v qsub
+
+bash submit/submit_pipeline.sh --config "${CONFIG}" --step 1 --dry-run
+bash submit/submit_pipeline.sh --config "${CONFIG}" --step 1
+```
+
+These wrappers are specific to Broad UGER; another scheduler needs an adapted
+submission layer.
 
 ### Short dedicated gRNA library: supported mode
 

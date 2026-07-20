@@ -51,7 +51,63 @@ Parse 1.6.4 tree rather than patching it. With
 `gex_decontamination.enabled: false`, Step 1a invokes the original executable
 directly and no overlay is installed.
 
-## Fresh-run data flow
+## Fresh v1.4 FASTQ start
+
+Obtain the split-pipe 1.6.4 source directly from Parse Biosciences and place the
+pristine distribution at the configured `paths.splitpipe_dir`, normally
+`ParseBiosciences-Pipeline.1.6.4` inside the project tree. v1.4 does not install
+or redistribute that vendor source; its tracked patch is applied only as a
+validated in-memory runtime overlay.
+
+Start from the public config matching the guide design, rather than adding only
+`enabled: true` to an older config:
+
+```bash
+cd /medpop/rgupta/Jiahao/path/to/CSM_ccperturbseq
+cp config_dual.yaml my_fresh_v1_4.yaml
+# or: cp config_single.yaml my_fresh_v1_4.yaml
+```
+
+Edit all `environment`, `paths`, `libraries`, `splitpipe`, guide-reference, and
+guide-structure values. Use the complete decontamination block below and set:
+
+```yaml
+gex_decontamination:
+  enabled: true
+  integration: "splitpipe_pre_router"
+  existing_alignment:
+    enabled: false
+```
+
+`existing_alignment.enabled: false` makes this a fresh FASTQ run: survivors
+receive the v1.4 trimming policy and then proceed through human STAR. Keep
+Step 1c and guide-arm merging disabled until the identity-recovery criteria in
+[Configuration](#configuration) are appropriate for the actual R1 length. For
+a 100-cycle run, use the specific
+[short-read configuration](ILLUMINA_100_CYCLE_SEQUENCING.md#fresh-v14-short-read-gex-decontamination).
+
+The supplied submission wrappers target the Broad Institute's UGER cluster.
+From a Broad login node, verify the resolved array, binding, memory, runtime,
+and dependency requests, then submit Step 1:
+
+```bash
+PROJECT_DIR=/medpop/rgupta/Jiahao/path/to/CSM_ccperturbseq
+CONFIG=/medpop/rgupta/Jiahao/path/to/my_fresh_v1_4.yaml
+cd "${PROJECT_DIR}"
+
+source /broad/software/scripts/useuse
+reuse -q UGER || true
+command -v qsub
+
+bash submit/submit_pipeline.sh --config "${CONFIG}" --step 1 --dry-run
+bash submit/submit_pipeline.sh --config "${CONFIG}" --step 1
+```
+
+Heavy or split-pipe commands belong in the submitted jobs, not on the login
+node. See the [README quick start](../README.md#quick-start) to submit the whole
+pipeline or another selected step set.
+
+### Fresh-run data flow
 
 ```text
 raw paired GEX FASTQ
@@ -224,11 +280,14 @@ lower-confidence or incompatible rows. This is intentionally a high-specificity
 augmentation path, not an attempt to recover every structural contaminant.
 
 In the isolated release merge, those 9,014 reads collapsed to 6,788 GEX UMI
-clusters. Exact construct-aware overlap accounted for 6,041; after joint
-directional collapse only 693 clusters were incremental to the dedicated
-matrix. Dedicated-only recomputation remained exactly 3,272,782 UMIs and the
-combined matrix contained 3,273,475. This high overlap and small net change are
-why source merging remains disabled by default despite being supported.
+clusters. The strict exact cross-source key `(cell, guide, iBAR, UMI)` matched
+5,995 molecules, all with supporting pB agreement. The related value 6,041 is
+the collapsed source-union cluster diagnostic, not an exact molecular-key
+count. After joint directional collapse only 693 clusters were incremental to
+the dedicated matrix. Dedicated-only recomputation remained exactly 3,272,782
+UMIs and the combined matrix contained 3,273,475. This high overlap and small
+net change are why source merging remains disabled by default despite being
+supported.
 
 Set both `step1c.enabled` and `combine_with_grna_arm.enabled` to include
 GEX-derived evidence in final calls. Ordinary Step 3 output is retained as an
@@ -372,10 +431,18 @@ uger:
 ```
 
 The master and historical-BAM launchers validate these integer values and emit
-matching `-pe`, `-binding`, `h_vmem`, and `h_rt` arguments. Use `--dry-run` to
-inspect the exact command. More than 16 slots is not recommended for this
-workflow: full-C2 preprocessing used eight Parse workers and averaged about
-5.2 cores, while the observed memory footprint already fit comfortably.
+matching `-pe`, `-binding`, `h_vmem`, and `h_rt` arguments. The Step 1a wrapper
+passes the allocated `NSLOTS` to split-pipe as `--nthreads`; the slot count is
+not hardcoded and may be changed in YAML. `splitpipe.threads` is not the current
+UGER Step 1a resource control.
+
+Use `--dry-run` to inspect the exact command. Sixteen remains the recommended
+starting point because Parse 1.6.4 internally limits the preprocessing pool to
+eight workers, the full-C2 job averaged about 5.2 cores, and memory already fit
+comfortably. More than 16 may still help STAR, sorting, or other split-pipe
+phases on a different dataset, but it should be justified by accounting rather
+than assumed to accelerate the capped preprocessing phase. Because memory is
+requested per slot, increasing `slots` also increases total reserved memory.
 
 Before production, run the pilot-derived QC module and enable
 `require_qc_policy` only after its filter policy has been reviewed and marked
