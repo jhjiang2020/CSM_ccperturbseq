@@ -58,8 +58,10 @@ Dedicated gRNA after circularization capture:
 Universal reverse transcription produces long poly(A)-primed cDNA and short
 gRNA-probe products together. Size selection separates the GEX and gRNA
 fractions, but a small amount of short gRNA product can remain in GEX. Those GEX
-contaminants do not contain the leading N7. N7 is introduced later, when the
-dedicated gRNA fraction undergoes circularization-capture amplification.
+contaminants do not contain the leading N7. N7 is added later, during
+circularization-capture amplification of the dedicated gRNA fraction, to
+provide the initial-cycle nucleotide diversity needed for reliable Illumina
+base calling.
 
 The resulting R1 boundaries are:
 

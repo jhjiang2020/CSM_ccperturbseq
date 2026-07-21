@@ -75,6 +75,54 @@ environment:
   conda_env: "splitpipe"
 ```
 
+### Optional installation-free shared environment on Broad
+
+Members of `rguptalab` may reuse the published v1.4 production environment.
+Point both fields to its absolute prefix; do not use a personal `/home/unix/`
+path or the parent `envs/` directory:
+
+```yaml
+environment:
+  conda_prefix: "/medpop/rgupta/Jiahao/conda/envs/splitpipe-share"
+  conda_env: "/medpop/rgupta/Jiahao/conda/envs/splitpipe-share"
+```
+
+The Step 1-5 and production QC wrappers activate that prefix directly. Before
+the first submission, run this read-only check:
+
+```bash
+set -euo pipefail
+SHARED_ENV=/medpop/rgupta/Jiahao/conda/envs/splitpipe-share
+CONDA="${SHARED_ENV}/condabin/conda"
+
+printf 'shared environment:\n'
+test -r "${SHARED_ENV}/csm_shared_environment.complete.json"
+printf '  completion manifest: OK\n'
+"${CONDA}" run --prefix "${SHARED_ENV}" \
+  python -c 'import edlib, pandas, pysam, splitpipe, yaml' >/dev/null
+printf '  production imports: OK\n'
+"${CONDA}" run --prefix "${SHARED_ENV}" python -m pip check >/dev/null
+printf '  dependencies: OK\n'
+test -z "$(find "${SHARED_ENV}" -xdev -not -user jjiahao -print -quit)"
+printf '  ownership: OK\n'
+test -z "$(find "${SHARED_ENV}" -xdev -not -type l -perm /022 -print -quit)"
+printf '  permissions: OK\n'
+
+# Expected result:
+# shared environment:
+#   completion manifest: OK
+#   production imports: OK
+#   dependencies: OK
+#   ownership: OK
+#   permissions: OK
+```
+
+The prefix is owner-write and `rguptalab`-read/execute; its parent directories
+use sticky group-sharing mode `1770`. Consumers must configure writable project,
+output, log, and scratch paths and must not change the shared prefix. Maintainers
+republish the completion manifest after updates. Never store credentials or
+private configuration in the environment.
+
 The scripts under `submit/` are written specifically for the Broad Institute's
 UGER environment: they use `qsub`, the `broad` queue, UGER job arrays and
 dependencies, and Broad linear core binding. On another scheduler, retain the
@@ -275,8 +323,10 @@ rerun. A full release checkout is safer than maintaining this manual file set.
 ### Migrate the v1.3 configuration
 
 In the copied YAML, verify `environment.conda_prefix` and
-`environment.conda_env: splitpipe`. Keep the existing `libraries`, FASTQ paths,
-Parse kit/chemistry, guide structure, and guide reference, but update:
+`environment.conda_env`. Use the named `splitpipe` environment for a
+conventional Conda installation or the absolute shared-prefix configuration in
+the quick start above. Keep the existing `libraries`, FASTQ paths, Parse
+kit/chemistry, guide structure, and guide reference, but update:
 
 - `paths.project_dir` and `paths.splitpipe_dir` to the v1.4 checkout and its
   pristine `ParseBiosciences-Pipeline.1.6.4` tree;

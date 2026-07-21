@@ -67,6 +67,50 @@ class ReleasePackagingTest(unittest.TestCase):
             text.index("--mode mol"),
         )
 
+    def test_c2_case_study_release_assets_are_tracked(self):
+        tracked = set(subprocess.check_output(
+            ["git", "ls-files"], cwd=ROOT, text=True
+        ).splitlines())
+        assets = (
+            "docs/C2_GEX_GRNA_MISALIGNMENT_CASE_STUDY.md",
+            "scripts/c2_gex_grna_case_study.py",
+            "submit/submit_c2_gex_grna_case_study.sh",
+            "docs/assets/c2_gex_grna_misalignment/read_transformation.png",
+            "docs/assets/c2_gex_grna_misalignment/read_transformation.svg",
+            "docs/assets/c2_gex_grna_misalignment/klf2_locus.png",
+            "docs/assets/c2_gex_grna_misalignment/klf2_locus.svg",
+            "docs/assets/c2_gex_grna_misalignment/nfkb1_locus.png",
+            "docs/assets/c2_gex_grna_misalignment/nfkb1_locus.svg",
+        )
+        for relative in assets:
+            self.assertTrue((ROOT / relative).is_file(), relative)
+            self.assertIn(relative, tracked, relative)
+        evidence_root = ROOT / "docs/assets/c2_gex_grna_misalignment/data"
+        evidence_manifest = yaml.safe_load(
+            (evidence_root / "extraction.complete.json").read_text()
+        )
+        evidence_files = {
+            "extraction.complete.json", *evidence_manifest["output_files"]
+        }
+        for name in evidence_files:
+            relative = f"docs/assets/c2_gex_grna_misalignment/data/{name}"
+            self.assertTrue((ROOT / relative).is_file(), relative)
+            self.assertIn(relative, tracked, relative)
+
+    def test_c2_wrapper_accepts_absolute_production_environment(self):
+        text = (ROOT / "submit/submit_c2_gex_grna_case_study.sh").read_text()
+        self.assertNotIn('CONDA_ENV}" != "splitpipe', text)
+        self.assertIn('conda activate "${CONDA_ENV}"', text)
+        self.assertIn("import pandas, pysam, splitpipe, yaml", text)
+
+    def test_quickstart_publishes_cross_user_environment(self):
+        text = (ROOT / "README.md").read_text()
+        shared = "/medpop/rgupta/Jiahao/conda/envs/splitpipe-share"
+        self.assertEqual(text.count(f'conda_prefix: "{shared}"'), 1)
+        self.assertEqual(text.count(f'conda_env: "{shared}"'), 1)
+        self.assertIn("installation-free shared environment", text)
+        self.assertNotIn("/home/unix/jjiahao/", text)
+
     def test_every_multislot_production_wrapper_has_matching_binding(self):
         for path in sorted((ROOT / "submit").glob("*.sh")):
             text = path.read_text()

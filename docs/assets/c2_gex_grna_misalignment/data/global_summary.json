@@ -1,0 +1,17 @@
+{
+  "full_mapped_primary_reads": 0,
+  "guide_target_fraction_of_input": 0.23023013542949142,
+  "input_reads": 10559,
+  "library": "C2",
+  "prealignment_family_cpm_high": 69.65800744594634,
+  "prealignment_family_cpm_low": 42.47178969616205,
+  "raw_reads": 363646678,
+  "raw_structural_contaminant_cpm": 32.12733872410076,
+  "raw_structural_contaminants": 11683,
+  "short_false_gene_assigned_reads": 4008,
+  "short_guide_target_assigned_reads": 2431,
+  "short_mapped_primary_reads": 8113,
+  "short_multimapping_primary_reads": 1148,
+  "short_unique_reads": 6965,
+  "truth_panel_token": "5bbee5a9d61a3937b96fee7b868fa583"
+}

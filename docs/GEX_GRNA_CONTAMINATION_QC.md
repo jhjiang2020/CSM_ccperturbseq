@@ -141,8 +141,9 @@ command -v qsub
 ```
 
 Configuration is in `qc_config_gex_grna_contamination.yaml`. Every production
-launcher activates `environment.conda_env` (normally `splitpipe`) from the base
-config; it never activates `csm_analysis`. The optional
+launcher activates `environment.conda_env` from the base config, either the
+named `splitpipe` environment or the absolute shared `splitpipe-share` prefix;
+it never activates `csm_analysis`. The optional
 `CSM_GEX_CONTAM_ENV` submission variable is an explicit testing override.
 Conda's root is always read from `environment.conda_prefix`, with no
 user-specific path fallback. Manual activation before submission is not
@@ -590,6 +591,9 @@ ADAMTS7, KLF4, CEBPB, JUN, and CCM2. This is the biologically important result:
 short guide-derived reads can create false expression precisely at the intended
 perturbation target, while the v1.4 filter captured every such event observed
 in this C2 panel.
+
+A read- and locus-level follow-up for the two strongest complementary examples
+is available in the [C2 KLF2/NFKB1 misalignment case study](C2_GEX_GRNA_MISALIGNMENT_CASE_STUDY.md).
 
 ### Step 6 — Audit contaminant impact in existing split-pipe BAMs
 

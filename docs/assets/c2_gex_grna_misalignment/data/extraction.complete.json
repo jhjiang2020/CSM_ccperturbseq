@@ -1,0 +1,50 @@
+{
+  "complete": true,
+  "job_id": "60033760",
+  "library": "C2",
+  "output_files": {
+    "controlled_short54_alignments.tsv.gz": {
+      "bytes": 45910,
+      "sha256": "a0c0c3f8b919ddffb5589b13de26b154b819bde9ca32f12ce5c5f2dbc1d5eb3a"
+    },
+    "global_summary.json": {
+      "bytes": 622,
+      "sha256": "b87c46a6e9aac5995ee863452b90a79f08016820a66fb55c7538e43e5334871a"
+    },
+    "locus_annotation.tsv": {
+      "bytes": 926,
+      "sha256": "c592bf31af16bf4236851b302008d8885a015a35261597fea31598f0de1e2a75"
+    },
+    "locus_summary.tsv": {
+      "bytes": 1685,
+      "sha256": "f9f733bf58e4d15c27ccbf64ec98aa2475471743637ba1f7ed4564ddf8515fa0"
+    },
+    "putative_genuine_gex_reads.tsv.gz": {
+      "bytes": 6705,
+      "sha256": "173effd96bbf8a8cca9880c5adb86f2ceb950bac4658f0dc3f942b49ff83ce92"
+    },
+    "reference_windows.tsv.gz": {
+      "bytes": 583,
+      "sha256": "2c11060b3c41c569445347b5307c172a09a03056e2ecbf30dde9ceee994dbaf4"
+    },
+    "representative_raw_R1.fastq.gz": {
+      "bytes": 174,
+      "sha256": "c41734e89a2bca252cff869f35c53e132e2a80efb7ba6d95c426071ac8eddb4d"
+    },
+    "representative_reads.tsv": {
+      "bytes": 1602,
+      "sha256": "32d7ef3811a42b3b2a8f9380021ea8aa9fccd52731856557d8230b7a73e34bbf"
+    }
+  },
+  "privacy": {
+    "absolute_source_paths": "removed",
+    "cell_barcode_umi_fields": "removed",
+    "direct_read_identifiers": "pseudonymized_without_mapping",
+    "representative_scientific_sequences": "retained",
+    "unused_native_gex_query_sequences": "removed"
+  },
+  "sanitized": true,
+  "schema_version": 1,
+  "source_extraction_manifest_sha256": "bf296a44b5b9c95e50a147140a1b9130f82ed63cd5bf9a3a6967a95e38b920f2",
+  "truth_panel_token": "5bbee5a9d61a3937b96fee7b868fa583"
+}
