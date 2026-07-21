@@ -2,6 +2,7 @@
 """Validate Step 1a GEX decontamination manifests before combine/resume."""
 
 import argparse
+import csv
 import hashlib
 import json
 import sys
@@ -16,6 +17,8 @@ if str(SCRIPT_DIR) not in sys.path:
 from gex_grna_filter import filter_settings_sha256, load_filter_from_config  # noqa: E402
 
 EXPECTED_FILTER_SCHEMA = 4
+EXPECTED_HARMONIZED_SCHEMA = 2
+EXPECTED_ALIGNMENT_STATS_SCHEMA = 1
 EXPECTED_SURVIVOR_TRIM_POLICY = "full_tso_endpoint_then_parse_exact_17mer"
 
 
@@ -25,6 +28,252 @@ def sha256_file(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def read_stats_values(path: Path) -> dict[str, str]:
+    with path.open(newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None or not {"statistic", "value"}.issubset(
+            reader.fieldnames
+        ):
+            raise ValueError(f"invalid split-pipe statistics header: {path}")
+        values = {}
+        for row in reader:
+            key = str(row.get("statistic", "")).strip()
+            if not key or key in values:
+                raise ValueError(f"invalid or duplicate statistic {key!r}: {path}")
+            values[key] = str(row.get("value", "")).strip()
+    return values
+
+
+def required_int(mapping, key, context):
+    try:
+        return int(mapping[key])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"missing/invalid {key!r} in {context}") from exc
+
+
+def validate_existing_alignment_contract(
+    name, filter_payload, harmonized, run_root, *, verify_bam_hashes, errors
+):
+    if harmonized.get("schema_version") != EXPECTED_HARMONIZED_SCHEMA:
+        errors.append(f"{name}: harmonized BAM manifest schema is stale")
+
+    source_value = harmonized.get("source_bam")
+    output_value = harmonized.get("output_bam")
+    source = Path(source_value) if source_value else None
+    output_bam = Path(output_value) if output_value else None
+    if source is None or not source.is_file():
+        errors.append(f"{name}: historical source BAM is missing")
+    elif output_bam is not None and source.resolve() == output_bam.resolve():
+        errors.append(f"{name}: source and output BAM are in-place")
+    else:
+        expected_source_sha = harmonized.get("source_bam_sha256")
+        if verify_bam_hashes and sha256_file(source) != expected_source_sha:
+            errors.append(f"{name}: production source BAM SHA-256 changed")
+    if output_bam is None or not output_bam.is_file():
+        errors.append(f"{name}: harmonized output BAM is missing")
+    else:
+        expected_output_sha = harmonized.get("output_bam_sha256")
+        if verify_bam_hashes and sha256_file(output_bam) != expected_output_sha:
+            errors.append(f"{name}: harmonized output BAM SHA-256 changed after mol")
+    if harmonized.get("name_sort_validated") is not True:
+        errors.append(f"{name}: query-name validation is missing")
+
+    try:
+        records_before = required_int(harmonized, "records_before", "BAM manifest")
+        records_removed = required_int(harmonized, "records_removed", "BAM manifest")
+        records_after = required_int(harmonized, "records_after", "BAM manifest")
+        qnames_before = required_int(harmonized, "qnames_before", "BAM manifest")
+        qnames_removed = required_int(harmonized, "qnames_removed", "BAM manifest")
+        qnames_after = required_int(harmonized, "qnames_after", "BAM manifest")
+        original_headers = required_int(
+            harmonized, "qnames_with_original_header", "BAM manifest"
+        )
+        positive_records = required_int(
+            harmonized, "positive_id_records", "BAM manifest"
+        )
+        positive_unique = required_int(
+            harmonized, "positive_unique_ids", "BAM manifest"
+        )
+        positives_seen = required_int(
+            harmonized, "positive_qnames_seen", "BAM manifest"
+        )
+        positives_missing = required_int(
+            harmonized, "positive_ids_missing_from_bam", "BAM manifest"
+        )
+        filter_positives = required_int(
+            filter_payload.get("statistics", {}),
+            "csm_gex_filter_positive_reads",
+            "filter manifest",
+        )
+        valid_positives = required_int(
+            filter_payload.get("statistics", {}),
+            "csm_gex_filter_positive_valid_barcode_reads",
+            "filter manifest",
+        )
+    except ValueError as exc:
+        errors.append(f"{name}: historical BAM count contract is incomplete: {exc}")
+        return
+
+    if records_before != records_removed + records_after:
+        errors.append(f"{name}: BAM record invariant failed")
+    if qnames_before != qnames_removed + qnames_after:
+        errors.append(f"{name}: BAM QNAME invariant failed")
+    if records_before and original_headers <= 0:
+        errors.append(f"{name}: no original-header QNAMEs were validated")
+    if positive_records != filter_positives or positive_unique != filter_positives:
+        errors.append(
+            f"{name}: positive evidence count differs from the filter manifest"
+        )
+    if positives_missing != positive_unique - positives_seen:
+        errors.append(f"{name}: missing-positive QNAME arithmetic failed")
+    if positives_seen != qnames_removed:
+        errors.append(
+            f"{name}: removed QNAMEs do not equal observed positive QNAMEs"
+        )
+    if positives_seen > valid_positives:
+        errors.append(
+            f"{name}: aligned positive QNAMEs exceed valid-barcode positives"
+        )
+    if harmonized.get("positive_valid_barcode_records") != valid_positives:
+        errors.append(f"{name}: valid-positive provenance count is inconsistent")
+
+    handoff = harmonized.get("alignment_stats_contract")
+    if not isinstance(handoff, dict):
+        errors.append(f"{name}: mol alignment-statistics handoff is missing")
+        return
+    if handoff.get("schema_version") != EXPECTED_ALIGNMENT_STATS_SCHEMA:
+        errors.append(f"{name}: mol alignment-statistics schema is stale")
+    try:
+        source_unique = required_int(
+            handoff, "source_reads_align_unique", "alignment-statistics handoff"
+        )
+        source_multimap = required_int(
+            handoff, "source_reads_align_multimap", "alignment-statistics handoff"
+        )
+        removed_unique = required_int(
+            handoff, "removed_unique_qnames", "alignment-statistics handoff"
+        )
+        removed_multimap = required_int(
+            handoff, "removed_multimap_qnames", "alignment-statistics handoff"
+        )
+        filtered_unique = required_int(
+            handoff, "filtered_reads_align_unique", "alignment-statistics handoff"
+        )
+        filtered_multimap = required_int(
+            handoff, "filtered_reads_align_multimap", "alignment-statistics handoff"
+        )
+        align_input = required_int(
+            handoff, "source_reads_align_input", "alignment-statistics handoff"
+        )
+        number_of_reads = required_int(
+            handoff, "number_of_reads", "alignment-statistics handoff"
+        )
+        source_valid = required_int(
+            handoff, "source_reads_valid_barcode", "alignment-statistics handoff"
+        )
+        sandbox_valid = required_int(
+            handoff, "sandbox_reads_valid_barcode", "alignment-statistics handoff"
+        )
+        handoff_valid_positives = required_int(
+            handoff, "valid_positive_records", "alignment-statistics handoff"
+        )
+    except ValueError as exc:
+        errors.append(f"{name}: mol alignment-statistics contract is incomplete: {exc}")
+        return
+
+    if source_unique + source_multimap != qnames_before:
+        errors.append(f"{name}: source alignment counts do not match source BAM")
+    if removed_unique + removed_multimap != qnames_removed:
+        errors.append(f"{name}: removed alignment counts do not match removed QNAMEs")
+    if filtered_unique != source_unique - removed_unique:
+        errors.append(f"{name}: filtered unique-alignment count is inconsistent")
+    if filtered_multimap != source_multimap - removed_multimap:
+        errors.append(f"{name}: filtered multimap count is inconsistent")
+    if filtered_unique + filtered_multimap != qnames_after:
+        errors.append(f"{name}: filtered alignment counts do not match output BAM")
+    if handoff_valid_positives != valid_positives:
+        errors.append(f"{name}: handoff valid-positive count is inconsistent")
+    if source_valid - sandbox_valid != valid_positives:
+        errors.append(f"{name}: handoff valid-barcode count difference is inconsistent")
+    if align_input != source_valid:
+        errors.append(f"{name}: source STAR input differs from valid-barcode reads")
+
+    source_stats_value = handoff.get("source_pre_align_stats")
+    source_stats = Path(source_stats_value) if source_stats_value else None
+    if source_stats is None or not source_stats.is_file():
+        errors.append(f"{name}: historical pre-alignment statistics are missing")
+    else:
+        expected_stats_sha = handoff.get("source_pre_align_stats_sha256")
+        if sha256_file(source_stats) != expected_stats_sha:
+            errors.append(f"{name}: historical pre-alignment statistics changed")
+        if source is not None and source_stats.resolve() != (
+            source.parent / "pre_align_stats.csv"
+        ).resolve():
+            errors.append(f"{name}: historical BAM/statistics paths are inconsistent")
+        try:
+            historical_stats = read_stats_values(source_stats)
+            historical_reads = required_int(
+                historical_stats, "number_of_reads", source_stats
+            )
+            historical_valid = required_int(
+                historical_stats, "reads_valid_barcode", source_stats
+            )
+            historical_input = required_int(
+                historical_stats, "reads_align_input", source_stats
+            )
+            historical_unique = required_int(
+                historical_stats, "reads_align_unique", source_stats
+            )
+            historical_multimap = required_int(
+                historical_stats, "reads_align_multimap", source_stats
+            )
+        except (OSError, ValueError) as exc:
+            errors.append(f"{name}: cannot validate historical alignment statistics: {exc}")
+        else:
+            if (
+                historical_reads != number_of_reads
+                or historical_valid != source_valid
+                or historical_input != align_input
+                or historical_unique != source_unique
+                or historical_multimap != source_multimap
+            ):
+                errors.append(f"{name}: historical alignment-statistics values changed")
+
+    sandbox_stats = run_root / "process" / "pre_align_stats.csv"
+    recorded_sandbox = handoff.get("sandbox_pre_align_stats")
+    if not sandbox_stats.is_file() or not recorded_sandbox:
+        errors.append(f"{name}: sandbox mol statistics are missing")
+    elif Path(recorded_sandbox).resolve() != sandbox_stats.resolve():
+        errors.append(f"{name}: sandbox mol-statistics path is inconsistent")
+    else:
+        try:
+            current_stats = read_stats_values(sandbox_stats)
+            current_input = required_int(
+                current_stats, "reads_align_input", sandbox_stats
+            )
+            current_reads = required_int(
+                current_stats, "number_of_reads", sandbox_stats
+            )
+            current_valid = required_int(
+                current_stats, "reads_valid_barcode", sandbox_stats
+            )
+            current_unique = required_int(
+                current_stats, "reads_align_unique", sandbox_stats
+            )
+            current_multimap = required_int(
+                current_stats, "reads_align_multimap", sandbox_stats
+            )
+        except (OSError, ValueError) as exc:
+            errors.append(f"{name}: cannot validate sandbox mol statistics: {exc}")
+        else:
+            if current_input != align_input:
+                errors.append(f"{name}: sandbox STAR-input statistic changed")
+            if current_reads != number_of_reads or current_valid != sandbox_valid:
+                errors.append(f"{name}: sandbox preprocessing statistics changed")
+            if current_unique != filtered_unique or current_multimap != filtered_multimap:
+                errors.append(f"{name}: sandbox alignment counts changed after handoff")
 
 
 def validate(config_path, only_library=None, verify_bam_hashes=True):
@@ -123,73 +372,17 @@ def validate(config_path, only_library=None, verify_bam_hashes=True):
                 if harmonized.get("survivor_tso_trim_policy") != expected_trim_policy:
                     errors.append(f"{name}: harmonized BAM survivor trim policy is stale")
                 bam = harmonized.get("output_bam")
-                if not bam or not Path(bam).is_file():
+                if harmonized.get("alignment_reused") is True:
+                    validate_existing_alignment_contract(
+                        name,
+                        payload,
+                        harmonized,
+                        run_root,
+                        verify_bam_hashes=verify_bam_hashes,
+                        errors=errors,
+                    )
+                elif not bam or not Path(bam).is_file():
                     errors.append(f"{name}: harmonized BAM is missing")
-                elif harmonized.get("alignment_reused") is True:
-                    source_value = harmonized.get("source_bam")
-                    source = Path(source_value) if source_value else None
-                    output_bam = Path(bam)
-                    if source is None or not source.is_file():
-                        errors.append(f"{name}: historical source BAM is missing")
-                    elif source.resolve() == output_bam.resolve():
-                        errors.append(f"{name}: source and output BAM are in-place")
-                    else:
-                        expected_source_sha = harmonized.get("source_bam_sha256")
-                        if verify_bam_hashes and sha256_file(source) != expected_source_sha:
-                            errors.append(
-                                f"{name}: production source BAM SHA-256 changed"
-                            )
-                    expected_output_sha = harmonized.get("output_bam_sha256")
-                    if verify_bam_hashes and sha256_file(output_bam) != expected_output_sha:
-                        errors.append(
-                            f"{name}: harmonized output BAM SHA-256 changed after mol"
-                        )
-                    if harmonized.get("name_sort_validated") is not True:
-                        errors.append(f"{name}: query-name validation is missing")
-                    try:
-                        records_before = int(harmonized["records_before"])
-                        records_removed = int(harmonized["records_removed"])
-                        records_after = int(harmonized["records_after"])
-                        qnames_before = int(harmonized["qnames_before"])
-                        qnames_removed = int(harmonized["qnames_removed"])
-                        qnames_after = int(harmonized["qnames_after"])
-                        original_headers = int(
-                            harmonized["qnames_with_original_header"]
-                        )
-                        positives_seen = int(harmonized["positive_qnames_seen"])
-                        positives_missing = int(
-                            harmonized["positive_ids_missing_from_bam"]
-                        )
-                        valid_positives = int(
-                            payload["statistics"][
-                                "csm_gex_filter_positive_valid_barcode_reads"
-                            ]
-                        )
-                    except (KeyError, TypeError, ValueError):
-                        errors.append(
-                            f"{name}: historical BAM count contract is incomplete"
-                        )
-                    else:
-                        if records_before != records_removed + records_after:
-                            errors.append(f"{name}: BAM record invariant failed")
-                        if qnames_before != qnames_removed + qnames_after:
-                            errors.append(f"{name}: BAM QNAME invariant failed")
-                        if records_before and original_headers <= 0:
-                            errors.append(
-                                f"{name}: no original-header QNAMEs were validated"
-                            )
-                        if positives_missing != 0:
-                            errors.append(
-                                f"{name}: filter-positive IDs are missing from source BAM"
-                            )
-                        if not (
-                            positives_seen == qnames_removed == valid_positives
-                        ):
-                            errors.append(
-                                f"{name}: valid-barcode removal is not exact: "
-                                f"seen={positives_seen}, removed={qnames_removed}, "
-                                f"expected={valid_positives}"
-                            )
         manifests.append(path)
     if errors:
         raise ValueError("Step 1a GEX filter validation failed:\n  " + "\n  ".join(errors))

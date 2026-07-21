@@ -204,6 +204,11 @@ if [[ "${EXISTING_ALIGNMENT_ENABLED}" == "True" ]]; then
         echo "ERROR: No compatible name-sorted/annotated BAM found under ${SOURCE_SUBLIB}/process"
         exit 1
     fi
+    SOURCE_PRE_ALIGN_STATS="${SOURCE_SUBLIB}/process/pre_align_stats.csv"
+    if [[ ! -f "${SOURCE_PRE_ALIGN_STATS}" ]]; then
+        echo "ERROR: Historical alignment statistics are missing: ${SOURCE_PRE_ALIGN_STATS}"
+        exit 1
+    fi
     if [[ -e "${OUT_SUBLIB}/process/barcode_headAligned_sorted.bam" ]]; then
         echo "ERROR: Existing-alignment sandbox already contains a harmonized BAM: ${OUT_SUBLIB}"
         exit 1
@@ -228,6 +233,7 @@ if [[ "${EXISTING_ALIGNMENT_ENABLED}" == "True" ]]; then
 
     python3 "${SCRIPTS_DIR}/gex_grna_bam_filter.py" \
         --source-bam "${SOURCE_BAM}" \
+        --source-pre-align-stats "${SOURCE_PRE_ALIGN_STATS}" \
         --output-dir "${OUT_SUBLIB}" \
         --filter-manifest "${OUTPUT_DIR}/gex_grna_filter/${LIB_NAME}/rejected_pairs.complete.json" \
         --library "${LIB_NAME}" \

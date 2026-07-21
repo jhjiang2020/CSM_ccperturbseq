@@ -319,9 +319,12 @@ For each library Step 1a then:
 2. obtains positive IDs from the completed Step 1a manifest;
 3. removes every alignment record for those QNAMEs from the historical
    `barcode_headAligned_anno.bam` or `barcode_headAligned_sorted.bam`;
-4. atomically installs `process/barcode_headAligned_sorted.bam` plus
-   `csm_harmonized_bam.complete.json` in the sandbox;
-5. resumes the sandbox from split-pipe `--mode mol`.
+4. validates the historical `pre_align_stats.csv`, classifies removed QNAMEs
+   as unique or multimapping, and installs adjusted alignment counts in the
+   sandbox statistics table;
+5. atomically installs `process/barcode_headAligned_sorted.bam`, then writes
+   the schema-2 `csm_harmonized_bam.complete.json` as the final readiness gate;
+6. resumes the sandbox from split-pipe `--mode mol`.
 
 The environment-gated mol cleanup seam preserves only the harmonized sorted BAM
 referenced by its completion manifest; ordinary chunk/temp cleanup still runs.
@@ -333,9 +336,20 @@ for a historical BAM requires a new alignment; the sandboxed BAM-only route
 otherwise remains intentionally alignment-free.
 
 The source BAM must retain split-pipe's `__OH_` original-header token and be in
-query-name order. Missing tokens, incompatible ordering, unavailable positive
-IDs, in-place paths, partial outputs, and record-count invariant failures are
-hard errors. Step 1b automatically combines the configured sandbox directories.
+query-name order. The supported historical BAM is aligned-only: its QNAME count
+must equal historical `reads_align_unique + reads_align_multimap`. Filter
+positives with invalid barcodes or no retained alignment are legitimately absent
+from this BAM. Validation therefore requires that every removed QNAME is a
+filter-positive QNAME and that seen/missing counts reconcile; it does not require
+every raw positive ID to occur in the aligned BAM.
+
+Missing original-header tokens, incompatible ordering, unavailable positive
+evidence, a raw-read or valid-barcode count mismatch, inconsistent alignment
+classes, in-place paths, partial outputs, and record/count invariant failures
+are hard errors. The schema-2 harmonized manifest records source, removed, and
+filtered unique/multimap counts plus the historical statistics checksum. Step
+1b verifies both the BAM and the mol-statistics handoff before combining the
+configured sandbox directories.
 
 ## Outputs to inspect
 
@@ -356,6 +370,7 @@ The corresponding fresh-run or legacy sandbox also retains:
 ```text
 <gex run>/process/barcode_headAligned_sorted.bam
 <gex run>/process/csm_harmonized_bam.complete.json
+<gex run>/process/pre_align_stats.csv
 ```
 
 Only the harmonized root BAM is exempted from normal mol cleanup; worker/chunk

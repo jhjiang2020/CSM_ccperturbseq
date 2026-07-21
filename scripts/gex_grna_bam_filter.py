@@ -30,6 +30,8 @@ from typing import Iterable, Iterator, Optional, TextIO
 PIPELINE_VERSION = "1.4"
 OH_MARKER = "__OH_"
 FILTER_MANIFEST_SCHEMA = 4
+HARMONIZED_MANIFEST_SCHEMA = 2
+ALIGNMENT_STATS_CONTRACT_SCHEMA = 1
 SURVIVOR_TRIM_POLICY = "full_tso_endpoint_then_parse_exact_17mer"
 
 
@@ -78,6 +80,7 @@ class PositiveEvidence:
     filter_run_id: Optional[str] = None
     reference_sha256: Optional[str] = None
     filter_settings_sha256: Optional[str] = None
+    valid_positive_records: Optional[int] = None
 
 
 def ids_from_fastq(path: Path) -> PositiveEvidence:
@@ -195,6 +198,11 @@ def ids_from_filter_manifest(path: Path) -> PositiveEvidence:
             manifest.get("library"), manifest.get("run_id"),
             manifest.get("reference_sha256"),
             manifest.get("filter_settings_sha256"),
+            int(
+                statistics.get(
+                    "csm_gex_filter_positive_valid_barcode_reads", 0
+                )
+            ),
         )
 
     positive_list = _resolve_manifest_path(
@@ -229,6 +237,11 @@ def ids_from_filter_manifest(path: Path) -> PositiveEvidence:
         evidence.source_path, expected, manifest.get("library"),
         manifest.get("run_id"), manifest.get("reference_sha256"),
         manifest.get("filter_settings_sha256"),
+        (
+            int(statistics["csm_gex_filter_positive_valid_barcode_reads"])
+            if "csm_gex_filter_positive_valid_barcode_reads" in statistics
+            else None
+        ),
     )
 
 
@@ -265,6 +278,10 @@ class FilterStats:
     qnames_after: int = 0
     positive_qnames_seen: int = 0
     qnames_with_original_header: int = 0
+    source_unique_qnames: int = 0
+    source_multimap_qnames: int = 0
+    removed_unique_qnames: int = 0
+    removed_multimap_qnames: int = 0
 
 
 class QnameFilter:
@@ -277,7 +294,7 @@ class QnameFilter:
         self.previous_qname = None
         self.previous_key = None
 
-    def keep(self, qname: str) -> bool:
+    def keep(self, qname: str, alignment_class: Optional[str] = None) -> bool:
         sort_key = _queryname_sort_key(qname)
         if self.previous_key is not None and sort_key < self.previous_key:
             raise ValueError(
@@ -286,6 +303,14 @@ class QnameFilter:
         new_qname = qname != self.previous_qname
         if new_qname:
             self.stats.qnames_before += 1
+            if alignment_class == "unique":
+                self.stats.source_unique_qnames += 1
+            elif alignment_class == "multimap":
+                self.stats.source_multimap_qnames += 1
+            elif alignment_class is not None:
+                raise ValueError(
+                    f"unknown alignment class {alignment_class!r} for {qname!r}"
+                )
         self.previous_qname = qname
         self.previous_key = sort_key
 
@@ -298,6 +323,10 @@ class QnameFilter:
             self.stats.records_removed += 1
             if new_qname:
                 self.stats.qnames_removed += 1
+                if alignment_class == "unique":
+                    self.stats.removed_unique_qnames += 1
+                elif alignment_class == "multimap":
+                    self.stats.removed_multimap_qnames += 1
             self.seen_positive.add(raw_id)
             return False
         self.stats.records_after += 1
@@ -318,6 +347,30 @@ class QnameFilter:
         return self.stats
 
 
+def alignment_class(*, mapq: int, nh: Optional[int] = None) -> str:
+    """Classify one STAR output record using NH, with Parse MAPQ fallback."""
+    if nh is not None:
+        try:
+            hit_count = int(nh)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid STAR NH tag: {nh!r}") from exc
+        if hit_count <= 0:
+            raise ValueError(f"invalid STAR NH tag: {nh!r}")
+        return "unique" if hit_count == 1 else "multimap"
+    return "unique" if int(mapq) == 255 else "multimap"
+
+
+def _sam_alignment_class(fields: list[str]) -> str:
+    if len(fields) < 11:
+        raise ValueError("malformed SAM alignment record")
+    nh = None
+    for value in fields[11:]:
+        if value.startswith("NH:i:"):
+            nh = value.split(":", 2)[2]
+            break
+    return alignment_class(mapq=int(fields[4]), nh=nh)
+
+
 def filter_sam_lines(lines: Iterable[str], output: TextIO,
                      positive_ids: frozenset[str]):
     """Filter SAM text while preserving every header/survivor line exactly."""
@@ -332,10 +385,10 @@ def filter_sam_lines(lines: Iterable[str], output: TextIO,
         saw_record = True
         if not line.strip():
             continue
-        fields = line.split("\t", 1)
-        if len(fields) != 2:
+        fields = line.rstrip("\n").split("\t")
+        if len(fields) < 11:
             raise ValueError("malformed SAM alignment line")
-        if qfilter.keep(fields[0]):
+        if qfilter.keep(fields[0], _sam_alignment_class(fields)):
             output.write(line)
     _validate_header_sort_text("".join(header_lines))
     return qfilter.finalize(), "".join(header_lines)
@@ -379,7 +432,11 @@ def _filter_with_pysam(source: Path, temporary: Path,
         _validate_header_sort_dict(header_dict)
         with pysam.AlignmentFile(str(temporary), "wb", template=source_bam) as output:
             for record in source_bam.fetch(until_eof=True):
-                if qfilter.keep(record.query_name):
+                nh = record.get_tag("NH") if record.has_tag("NH") else None
+                record_class = alignment_class(
+                    mapq=record.mapping_quality, nh=nh
+                )
+                if qfilter.keep(record.query_name, record_class):
                     output.write(record)
     stats = qfilter.finalize()
 
@@ -463,6 +520,174 @@ def atomic_json(path: Path, payload: dict) -> None:
     os.replace(temporary, path)
 
 
+def _read_stats_table(path: Path) -> tuple[list[str], dict[str, str]]:
+    if not path.is_file():
+        raise FileNotFoundError(f"split-pipe statistics file is missing: {path}")
+    order = []
+    values = {}
+    with path.open(newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None or not {"statistic", "value"}.issubset(
+            reader.fieldnames
+        ):
+            raise ValueError(f"invalid split-pipe statistics header: {path}")
+        for row_number, row in enumerate(reader, start=2):
+            key = str(row.get("statistic", "")).strip()
+            if not key:
+                raise ValueError(f"empty statistic at {path}:{row_number}")
+            if key in values:
+                raise ValueError(f"duplicate statistic {key!r} in {path}")
+            order.append(key)
+            values[key] = str(row.get("value", "")).strip()
+    return order, values
+
+
+def _required_int(values: dict[str, str], key: str, path: Path) -> int:
+    if key not in values:
+        raise ValueError(f"required statistic {key!r} is missing from {path}")
+    try:
+        return int(values[key])
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"required statistic {key!r} is not an integer in {path}: "
+            f"{values[key]!r}"
+        ) from exc
+
+
+def _atomic_stats_table(path: Path, order: list[str], values: dict[str, str]) -> None:
+    temporary = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    with temporary.open("w", newline="") as handle:
+        writer = csv.writer(handle, lineterminator="\n")
+        writer.writerow(("statistic", "value"))
+        for key in order:
+            writer.writerow((key, values[key]))
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+
+
+def install_existing_alignment_stats(
+    source_pre_align_stats,
+    sandbox,
+    evidence: PositiveEvidence,
+    bam_stats: FilterStats,
+) -> dict:
+    """Install source-derived alignment counts required by Parse ``mol``.
+
+    The historical BAM is aligned-only in the supported v1.4 reuse route.
+    New preprocessing owns all non-alignment statistics; historical alignment
+    fields are copied with unique/multimap counts adjusted for removed QNAMEs.
+    """
+    source_path = Path(source_pre_align_stats).expanduser().resolve()
+    sandbox = Path(sandbox).expanduser().resolve()
+    sandbox_path = sandbox / "process" / "pre_align_stats.csv"
+    source_order, source_values = _read_stats_table(source_path)
+    sandbox_order, sandbox_values = _read_stats_table(sandbox_path)
+
+    source_reads = _required_int(source_values, "number_of_reads", source_path)
+    sandbox_reads = _required_int(sandbox_values, "number_of_reads", sandbox_path)
+    if source_reads != sandbox_reads:
+        raise ValueError(
+            "historical and v1.4 preprocessing read counts differ: "
+            f"source={source_reads}, sandbox={sandbox_reads}"
+        )
+
+    source_valid = _required_int(
+        source_values, "reads_valid_barcode", source_path
+    )
+    sandbox_valid = _required_int(
+        sandbox_values, "reads_valid_barcode", sandbox_path
+    )
+    if evidence.valid_positive_records is None:
+        raise ValueError(
+            "completed filter evidence lacks the valid-positive count required "
+            "for an existing-alignment statistics handoff"
+        )
+    valid_positive_records = int(evidence.valid_positive_records)
+    if source_valid - sandbox_valid != valid_positive_records:
+        raise ValueError(
+            "historical/v1.4 valid-barcode count difference does not equal the "
+            "filter valid-positive count: "
+            f"source={source_valid}, sandbox={sandbox_valid}, "
+            f"valid_positives={valid_positive_records}"
+        )
+
+    source_input = _required_int(source_values, "reads_align_input", source_path)
+    source_unique = _required_int(source_values, "reads_align_unique", source_path)
+    source_multimap = _required_int(
+        source_values, "reads_align_multimap", source_path
+    )
+    if source_input != source_valid:
+        raise ValueError(
+            "historical STAR input does not match historical valid-barcode reads: "
+            f"align_input={source_input}, valid_barcode={source_valid}"
+        )
+    if source_unique + source_multimap != bam_stats.qnames_before:
+        raise ValueError(
+            "historical source is not the supported aligned-only BAM contract: "
+            f"unique+multimap={source_unique + source_multimap}, "
+            f"BAM_qnames={bam_stats.qnames_before}"
+        )
+    if (
+        bam_stats.source_unique_qnames != source_unique
+        or bam_stats.source_multimap_qnames != source_multimap
+    ):
+        raise ValueError(
+            "BAM NH/MAPQ alignment classes disagree with historical STAR stats: "
+            f"BAM unique/multimap={bam_stats.source_unique_qnames}/"
+            f"{bam_stats.source_multimap_qnames}, stats={source_unique}/"
+            f"{source_multimap}"
+        )
+
+    removed_unique = bam_stats.removed_unique_qnames
+    removed_multimap = bam_stats.removed_multimap_qnames
+    if removed_unique + removed_multimap != bam_stats.qnames_removed:
+        raise RuntimeError(
+            "removed unique/multimap QNAME counts do not equal removed QNAMEs"
+        )
+    filtered_unique = source_unique - removed_unique
+    filtered_multimap = source_multimap - removed_multimap
+    if filtered_unique < 0 or filtered_multimap < 0:
+        raise RuntimeError("filtered alignment statistics became negative")
+    if filtered_unique + filtered_multimap != bam_stats.qnames_after:
+        raise RuntimeError(
+            "filtered unique/multimap counts do not equal output BAM QNAMEs"
+        )
+
+    merged_values = dict(sandbox_values)
+    merged_order = list(sandbox_order)
+    for key in source_order:
+        if not key.startswith("reads_align_"):
+            continue
+        if key not in merged_values:
+            merged_order.append(key)
+        merged_values[key] = source_values[key]
+    # STAR was not rerun, so reads_align_input and descriptive values remain
+    # source-derived. These two counts describe the BAM actually entering mol.
+    merged_values["reads_align_unique"] = str(filtered_unique)
+    merged_values["reads_align_multimap"] = str(filtered_multimap)
+    _atomic_stats_table(sandbox_path, merged_order, merged_values)
+
+    return {
+        "schema_version": ALIGNMENT_STATS_CONTRACT_SCHEMA,
+        "source_pre_align_stats": str(source_path),
+        "source_pre_align_stats_sha256": _sha256(source_path),
+        "sandbox_pre_align_stats": str(sandbox_path),
+        "sandbox_pre_align_stats_sha256_at_handoff": _sha256(sandbox_path),
+        "number_of_reads": source_reads,
+        "source_reads_valid_barcode": source_valid,
+        "sandbox_reads_valid_barcode": sandbox_valid,
+        "valid_positive_records": valid_positive_records,
+        "source_reads_align_input": source_input,
+        "source_reads_align_unique": source_unique,
+        "source_reads_align_multimap": source_multimap,
+        "removed_unique_qnames": removed_unique,
+        "removed_multimap_qnames": removed_multimap,
+        "filtered_reads_align_unique": filtered_unique,
+        "filtered_reads_align_multimap": filtered_multimap,
+    }
+
+
 def register_fresh_harmonized_bam(source_bam, output_dir, filter_manifest,
                                   *, library=None):
     """Register the BAM produced after pre-STAR filtering in a fresh run."""
@@ -539,7 +764,8 @@ def register_fresh_harmonized_bam(source_bam, output_dir, filter_manifest,
 
 
 def filter_existing_bam(source_bam, output_dir, evidence: PositiveEvidence,
-                        *, backend="auto", samtools=None, library=None):
+                        *, source_pre_align_stats=None, backend="auto",
+                        samtools=None, library=None):
     source = Path(source_bam).expanduser().resolve()
     sandbox = Path(output_dir).expanduser().resolve()
     if not source.is_file():
@@ -570,7 +796,16 @@ def filter_existing_bam(source_bam, output_dir, evidence: PositiveEvidence,
         except ImportError:
             selected_backend = "samtools"
 
+    if source_pre_align_stats is not None:
+        source_stats_path = Path(source_pre_align_stats).expanduser().resolve()
+        expected_stats_path = source.parent / "pre_align_stats.csv"
+        if source_stats_path != expected_stats_path:
+            raise ValueError(
+                "historical pre-alignment statistics must accompany the source BAM: "
+                f"expected {expected_stats_path}, observed {source_stats_path}"
+            )
     source_sha256 = _sha256(source)
+    alignment_stats_contract = None
     try:
         if selected_backend == "pysam":
             try:
@@ -592,16 +827,24 @@ def filter_existing_bam(source_bam, output_dir, evidence: PositiveEvidence,
 
         if stats.records_before != stats.records_removed + stats.records_after:
             raise RuntimeError("BAM record-count invariant failed before installation")
+        output_sha256 = _sha256(temporary)
         os.replace(temporary, output)
+        if source_pre_align_stats is not None:
+            alignment_stats_contract = install_existing_alignment_stats(
+                source_pre_align_stats, sandbox, evidence, stats
+            )
     except Exception:
         temporary.unlink(missing_ok=True)
         # Do not leave an apparently usable empty sandbox contract.
         raise
 
-    output_sha256 = _sha256(output)
     missing_ids = len(evidence.ids) - stats.positive_qnames_seen
     payload = {
-        "schema_version": 1,
+        "schema_version": (
+            HARMONIZED_MANIFEST_SCHEMA
+            if alignment_stats_contract is not None
+            else 1
+        ),
         "pipeline_version": PIPELINE_VERSION,
         "status": "complete",
         "complete": True,
@@ -627,6 +870,7 @@ def filter_existing_bam(source_bam, output_dir, evidence: PositiveEvidence,
         "survivor_tso_trim_policy": "not_applied_existing_alignment",
         "positive_id_records": evidence.record_count,
         "positive_unique_ids": len(evidence.ids),
+        "positive_valid_barcode_records": evidence.valid_positive_records,
         "positive_qnames_seen": stats.positive_qnames_seen,
         "positive_ids_missing_from_bam": missing_ids,
         "records_before": stats.records_before,
@@ -636,6 +880,11 @@ def filter_existing_bam(source_bam, output_dir, evidence: PositiveEvidence,
         "qnames_removed": stats.qnames_removed,
         "qnames_after": stats.qnames_after,
         "qnames_with_original_header": stats.qnames_with_original_header,
+        "source_unique_qnames": stats.source_unique_qnames,
+        "source_multimap_qnames": stats.source_multimap_qnames,
+        "removed_unique_qnames": stats.removed_unique_qnames,
+        "removed_multimap_qnames": stats.removed_multimap_qnames,
+        "alignment_stats_contract": alignment_stats_contract,
         "completed_at": datetime.now(timezone.utc).isoformat(),
     }
     atomic_json(manifest_path, payload)
@@ -664,6 +913,13 @@ def main():
     parser.add_argument(
         "--library", help="Sublibrary label (inferred from --filter-manifest when available)"
     )
+    parser.add_argument(
+        "--source-pre-align-stats",
+        help=(
+            "Historical process/pre_align_stats.csv. When supplied, install a "
+            "validated alignment-statistics handoff required by split-pipe mol."
+        ),
+    )
     args = parser.parse_args()
 
     try:
@@ -688,6 +944,7 @@ def main():
             )
         payload, manifest_path = filter_existing_bam(
             args.source_bam, args.output_dir, positive,
+            source_pre_align_stats=args.source_pre_align_stats,
             backend=args.backend, samtools=args.samtools, library=args.library,
         )
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
@@ -697,6 +954,13 @@ def main():
         f"Filtered BAM: {payload['records_before']:,} records before, "
         f"{payload['records_removed']:,} removed, {payload['records_after']:,} after"
     )
+    if payload.get("alignment_stats_contract"):
+        handoff = payload["alignment_stats_contract"]
+        print(
+            "Prepared mol alignment stats: "
+            f"unique={handoff['filtered_reads_align_unique']:,}, "
+            f"multimap={handoff['filtered_reads_align_multimap']:,}"
+        )
     print(f"Completion manifest: {manifest_path}")
 
 

@@ -25,6 +25,14 @@ def sam_record(qname, flag=0, pos=1, tags="GX:Z:GENE1"):
     )
 
 
+def write_stats(path, values):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "statistic,value\n"
+        + "".join(f"{key},{value}\n" for key, value in values.items())
+    )
+
+
 class BamFilterUnitTests(unittest.TestCase):
     def test_register_fresh_harmonized_bam_is_idempotent_and_checksummed(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -90,8 +98,17 @@ class BamFilterUnitTests(unittest.TestCase):
         self.assertEqual(stats.records_after, 1)
         self.assertEqual(stats.qnames_removed, 1)
         self.assertEqual(stats.positive_qnames_seen, 1)
+        self.assertEqual(stats.source_unique_qnames, 2)
+        self.assertEqual(stats.removed_unique_qnames, 1)
         self.assertEqual(header, "".join(lines[:2]))
         self.assertEqual(output.getvalue(), "".join(lines[:2] + [lines[-1]]))
+
+    def test_alignment_class_prefers_nh_and_falls_back_to_parse_mapq(self):
+        self.assertEqual(bam_filter.alignment_class(mapq=255), "unique")
+        self.assertEqual(bam_filter.alignment_class(mapq=3), "multimap")
+        self.assertEqual(bam_filter.alignment_class(mapq=255, nh=2), "multimap")
+        with self.assertRaisesRegex(ValueError, "invalid STAR NH"):
+            bam_filter.alignment_class(mapq=255, nh=0)
 
     def test_unsorted_source_is_rejected(self):
         output = StringIO()
@@ -155,6 +172,39 @@ class BamFilterUnitTests(unittest.TestCase):
             self.assertEqual(evidence.ids, frozenset())
             self.assertEqual(evidence.library, "C1")
 
+    def test_alignment_stats_handoff_rejects_mismatched_source_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_stats = root / "source/process/pre_align_stats.csv"
+            sandbox = root / "sandbox"
+            write_stats(source_stats, {
+                "number_of_reads": 10,
+                "reads_valid_barcode": 8,
+                "reads_align_input": 8,
+                "reads_align_unique": 5,
+                "reads_align_multimap": 1,
+            })
+            write_stats(sandbox / "process/pre_align_stats.csv", {
+                "number_of_reads": 10,
+                "reads_valid_barcode": 7,
+            })
+            evidence = bam_filter.PositiveEvidence(
+                frozenset({"positive"}), 1, "fixture", "fixture",
+                valid_positive_records=1,
+            )
+            stats = bam_filter.FilterStats(
+                qnames_before=6,
+                qnames_removed=1,
+                qnames_after=5,
+                source_unique_qnames=4,
+                source_multimap_qnames=2,
+                removed_unique_qnames=1,
+            )
+            with self.assertRaisesRegex(ValueError, "NH/MAPQ.*disagree"):
+                bam_filter.install_existing_alignment_stats(
+                    source_stats, sandbox, evidence, stats
+                )
+
 
 class SamtoolsFallbackIntegrationTest(unittest.TestCase):
     def test_cli_writes_new_bam_and_completion_manifest(self):
@@ -195,16 +245,35 @@ else:
             r1 = root / "rejected_R1.fastq.gz"
             with gzip.open(r1, "wt") as handle:
                 handle.write("@readA 1:N:0:I\nACGT\n+\nFFFF\n")
+                handle.write("@readMissing 1:N:0:I\nACGT\n+\nFFFF\n")
             manifest = root / "rejected_pairs.complete.json"
             manifest.write_text(json.dumps({
-                "status": "complete", "complete": True,
-                "rejected_pair_count": 1, "rejected_r1": str(r1),
+                "status": "complete", "complete": True, "library": "C1",
+                "rejected_pair_count": 2, "rejected_r1": str(r1),
+                "statistics": {
+                    "csm_gex_filter_positive_reads": 2,
+                    "csm_gex_filter_positive_valid_barcode_reads": 2,
+                },
             }))
             sandbox = root / "sandbox"
+            source_stats = root / "pre_align_stats.csv"
+            write_stats(source_stats, {
+                "number_of_reads": 3,
+                "reads_valid_barcode": 3,
+                "reads_align_input": 3,
+                "reads_align_unique": 2,
+                "reads_align_multimap": 0,
+                "reads_align_mean_rlen": 100,
+            })
+            write_stats(sandbox / "process/pre_align_stats.csv", {
+                "number_of_reads": 3,
+                "reads_valid_barcode": 1,
+            })
 
             subprocess.run([
                 sys.executable, str(SCRIPT),
                 "--source-bam", str(source),
+                "--source-pre-align-stats", str(source_stats),
                 "--output-dir", str(sandbox),
                 "--filter-manifest", str(manifest),
                 "--backend", "samtools", "--samtools", str(fake_samtools),
@@ -222,15 +291,31 @@ else:
             )
             self.assertTrue(completion["complete"])
             self.assertTrue(completion["alignment_reused"])
+            self.assertEqual(completion["schema_version"], 2)
             self.assertEqual(completion["source_bam_kind"], "annotated")
             self.assertEqual(completion["records_before"], 3)
             self.assertEqual(completion["records_removed"], 2)
             self.assertEqual(completion["records_after"], 1)
+            self.assertEqual(completion["positive_qnames_seen"], 1)
+            self.assertEqual(completion["positive_ids_missing_from_bam"], 1)
+            handoff = completion["alignment_stats_contract"]
+            self.assertEqual(handoff["source_reads_align_unique"], 2)
+            self.assertEqual(handoff["removed_unique_qnames"], 1)
+            self.assertEqual(handoff["filtered_reads_align_unique"], 1)
+            installed_stats = dict(
+                line.rstrip().split(",", 1)
+                for line in (sandbox / "process/pre_align_stats.csv")
+                .read_text().splitlines()[1:]
+            )
+            self.assertEqual(installed_stats["reads_align_input"], "3")
+            self.assertEqual(installed_stats["reads_align_unique"], "1")
+            self.assertEqual(installed_stats["reads_align_multimap"], "0")
 
             # Safe reruns never overwrite the installed output.
             rerun = subprocess.run([
                 sys.executable, str(SCRIPT),
                 "--source-bam", str(source), "--output-dir", str(sandbox),
+                "--source-pre-align-stats", str(source_stats),
                 "--filter-manifest", str(manifest),
                 "--backend", "samtools", "--samtools", str(fake_samtools),
             ], text=True, capture_output=True)

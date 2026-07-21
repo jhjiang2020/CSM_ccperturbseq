@@ -26,6 +26,14 @@ validator = load_script(
 filter_module = load_script("gex_filter_for_validation", "gex_grna_filter.py")
 
 
+def write_stats(path, values):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "statistic,value\n"
+        + "".join(f"{key},{value}\n" for key, value in values.items())
+    )
+
+
 class FilterManifestValidationTest(unittest.TestCase):
     def test_historical_bam_contract_rehashes_source_and_output(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -86,6 +94,7 @@ class FilterManifestValidationTest(unittest.TestCase):
                         "filter_settings_sha256": settings_hash,
                         "write_rejected_raw_pairs": False,
                         "statistics": {
+                            "csm_gex_filter_positive_reads": 2,
                             "csm_gex_filter_positive_valid_barcode_reads": 1
                         },
                     }
@@ -95,11 +104,29 @@ class FilterManifestValidationTest(unittest.TestCase):
             process.mkdir(parents=True)
             bam = process / "barcode_headAligned_sorted.bam"
             bam.write_bytes(b"filtered-output")
+            source_stats = source.parent / "pre_align_stats.csv"
+            write_stats(source_stats, {
+                "number_of_reads": 4,
+                "reads_valid_barcode": 3,
+                "reads_align_input": 3,
+                "reads_align_unique": 2,
+                "reads_align_multimap": 0,
+            })
+            sandbox_stats = process / "pre_align_stats.csv"
+            write_stats(sandbox_stats, {
+                "number_of_reads": 4,
+                "reads_valid_barcode": 2,
+                "reads_align_input": 3,
+                "reads_align_unique": 1,
+                "reads_align_multimap": 0,
+                "reads_map_transcriptome": 1,
+            })
             digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
             harmonized = process / "csm_harmonized_bam.complete.json"
             harmonized.write_text(
                 json.dumps(
                     {
+                        "schema_version": 2,
                         "complete": True,
                         "library": "C1",
                         "alignment_reused": True,
@@ -118,14 +145,53 @@ class FilterManifestValidationTest(unittest.TestCase):
                         "qnames_removed": 1,
                         "qnames_after": 1,
                         "qnames_with_original_header": 2,
+                        "positive_id_records": 2,
+                        "positive_unique_ids": 2,
+                        "positive_valid_barcode_records": 1,
                         "positive_qnames_seen": 1,
-                        "positive_ids_missing_from_bam": 0,
+                        "positive_ids_missing_from_bam": 1,
+                        "source_unique_qnames": 2,
+                        "source_multimap_qnames": 0,
+                        "removed_unique_qnames": 1,
+                        "removed_multimap_qnames": 0,
+                        "alignment_stats_contract": {
+                            "schema_version": 1,
+                            "source_pre_align_stats": str(source_stats),
+                            "source_pre_align_stats_sha256": digest(source_stats),
+                            "sandbox_pre_align_stats": str(sandbox_stats),
+                            "sandbox_pre_align_stats_sha256_at_handoff": digest(sandbox_stats),
+                            "number_of_reads": 4,
+                            "source_reads_valid_barcode": 3,
+                            "sandbox_reads_valid_barcode": 2,
+                            "valid_positive_records": 1,
+                            "source_reads_align_input": 3,
+                            "source_reads_align_unique": 2,
+                            "source_reads_align_multimap": 0,
+                            "removed_unique_qnames": 1,
+                            "removed_multimap_qnames": 0,
+                            "filtered_reads_align_unique": 1,
+                            "filtered_reads_align_multimap": 0,
+                        },
                     }
                 )
             )
             self.assertEqual(
                 len(validator.validate(config_path, only_library="C1")), 1
             )
+            payload = json.loads(harmonized.read_text())
+            payload["positive_ids_missing_from_bam"] = 0
+            harmonized.write_text(json.dumps(payload))
+            with self.assertRaisesRegex(ValueError, "missing-positive QNAME arithmetic"):
+                validator.validate(config_path, only_library="C1")
+            payload["positive_ids_missing_from_bam"] = 1
+            payload["positive_qnames_seen"] = 0
+            harmonized.write_text(json.dumps(payload))
+            with self.assertRaisesRegex(
+                ValueError, "removed QNAMEs do not equal observed positive QNAMEs"
+            ):
+                validator.validate(config_path, only_library="C1")
+            payload["positive_qnames_seen"] = 1
+            harmonized.write_text(json.dumps(payload))
             source.write_bytes(b"modified-production")
             with self.assertRaisesRegex(ValueError, "source BAM SHA-256 changed"):
                 validator.validate(config_path, only_library="C1")

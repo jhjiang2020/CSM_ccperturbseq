@@ -58,6 +58,15 @@ class ReleasePackagingTest(unittest.TestCase):
             self.assertTrue((ROOT / relative).is_file(), relative)
             self.assertIn(relative, tracked, relative)
 
+    def test_existing_alignment_step1a_supplies_mol_statistics(self):
+        text = (ROOT / "submit/submit_step1a_gex_array.sh").read_text()
+        self.assertIn('SOURCE_PRE_ALIGN_STATS="${SOURCE_SUBLIB}/process/pre_align_stats.csv"', text)
+        self.assertIn('--source-pre-align-stats "${SOURCE_PRE_ALIGN_STATS}"', text)
+        self.assertLess(
+            text.index('--source-pre-align-stats "${SOURCE_PRE_ALIGN_STATS}"'),
+            text.index("--mode mol"),
+        )
+
     def test_every_multislot_production_wrapper_has_matching_binding(self):
         for path in sorted((ROOT / "submit").glob("*.sh")):
             text = path.read_text()

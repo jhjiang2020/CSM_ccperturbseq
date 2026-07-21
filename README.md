@@ -201,6 +201,13 @@ output/
 The Step 1a schema-4 completion manifest records the synchronized rejected
 R1/R2 hashes and counts, ordered read-ID digest, exact FASTQ identities,
 reference/settings hashes, and a compact valid-positive barcode-evidence TSV.
+For historical aligned-BAM reuse, the separate schema-2 harmonized manifest
+also proves that source alignment statistics match the source BAM, records the
+unique/multimap removals, and installs the adjusted counts required by Parse
+`--mode mol`. Invalid-barcode and unaligned filter positives may be absent from
+an aligned-only source BAM; validation requires exact accounting of the
+positive QNAMEs that are present and removed rather than requiring all raw
+positive IDs to appear in that BAM.
 
 Fresh v1.4 setup and the complete decontamination configuration now live in the
 [v1.4 GEX decontamination guide](docs/GEX_DECONTAMINATION_V1_4.md#fresh-v14-fastq-start).
