@@ -116,6 +116,9 @@ fi
 IFS=$'\t' read -r STEP1A_SLOTS STEP1A_MEMORY_PER_SLOT_GB STEP1A_RUNTIME_HOURS STEP1A_H_RT < <(
     python3 "${RESOURCE_RESOLVER}" --config "${CONFIG}" --format tsv
 )
+IFS=$'\t' read -r STEP3_SLOTS STEP3_MEMORY_PER_SLOT_GB STEP3_RUNTIME_HOURS STEP3_H_RT < <(
+    python3 "${RESOURCE_RESOLVER}" --config "${CONFIG}" --step step3 --format tsv
+)
 if [[ "${DRY_RUN}" != true ]]; then
     mkdir -p "${LOG_DIR}"
 fi
@@ -133,6 +136,7 @@ echo "  Dry run:    ${DRY_RUN}"
 echo "  Step 1c:    ${STEP1C_ENABLED}"
 echo "  GEX merge:  ${GEX_SOURCE_MERGE_ENABLED}"
 echo "  Step 1a:    ${STEP1A_SLOTS} slots, ${STEP1A_MEMORY_PER_SLOT_GB}G/slot, ${STEP1A_H_RT}"
+echo "  Step 3:     ${STEP3_SLOTS} slots, ${STEP3_MEMORY_PER_SLOT_GB}G/slot ($((STEP3_SLOTS * STEP3_MEMORY_PER_SLOT_GB))G total), ${STEP3_H_RT}"
 echo "=========================================="
 echo ""
 
@@ -183,11 +187,11 @@ fi
 # Step 3: gRNA matching (array job, after Step 2)
 if should_run 3; then
     echo "--- Step 3: Match gRNA + iBAR (array ×${N_LIBS}) ---"
+    step3_hold=""
     if should_run 2; then
-        submit "qsub -v CSM_CONFIG=${CONFIG},CSM_PROJECT_DIR=${PROJECT_DIR} -hold_jid csm_step2_bc -t 1-${N_LIBS} -o ${LOG_DIR}/step3_match.\\\$JOB_ID.\\\$TASK_ID.log ${JOB_SUBMIT_DIR}/submit_step3_match.sh"
-    else
-        submit "qsub -v CSM_CONFIG=${CONFIG},CSM_PROJECT_DIR=${PROJECT_DIR} -t 1-${N_LIBS} -o ${LOG_DIR}/step3_match.\\\$JOB_ID.\\\$TASK_ID.log ${JOB_SUBMIT_DIR}/submit_step3_match.sh"
+        step3_hold="-hold_jid csm_step2_bc"
     fi
+    submit "qsub -pe smp ${STEP3_SLOTS} -binding linear:${STEP3_SLOTS} -l h_vmem=${STEP3_MEMORY_PER_SLOT_GB}G,h_rt=${STEP3_H_RT} -v CSM_CONFIG=${CONFIG},CSM_PROJECT_DIR=${PROJECT_DIR} ${step3_hold} -t 1-${N_LIBS} -o ${LOG_DIR}/step3_match.\\\$JOB_ID.\\\$TASK_ID.log ${JOB_SUBMIT_DIR}/submit_step3_match.sh"
     echo ""
 fi
 

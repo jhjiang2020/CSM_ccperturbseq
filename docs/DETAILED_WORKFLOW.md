@@ -221,13 +221,25 @@ flowchart TD
 
 **Script**: [03_match_grna_ibar.py](../scripts/03_match_grna_ibar.py)
 
-**UGER**: Array ×N, 64GB RAM, 8 processes (multiprocessing)
+**UGER**: Array ×N, 8 worker processes, 32GB requested memory (4GB/slot),
+12 hours by default. Optional `uger.step3` overrides change the request without
+editing the worker script.
 
 The most complex step — locates the gRNA and iBAR within each R1 read, then fuzzy-matches against the reference.
 
+Before production matching, an automatic preflight samples up to 10,000 input
+reads and warns about possible reversed iBAR references, reference-length
+mismatches, and low support. It writes `<library>_preflight.yaml` beside the
+matching products. `--preflight-only --preflight-fastq` supports an earlier
+check directly on raw gRNA R1, before Step 2. The worker pool bounds queued
+chunks to twice the worker count and prints progress after the first completed
+chunk. See [preflight and scaling](SCALABILITY_AND_PREFLIGHT.md) for details.
+
 ```mermaid
 flowchart TD
-    BC[("Barcode TSV<br>(from Step 2)")] --> CHUNK["Read in chunks<br>(100K rows)"]
+    BC[("Barcode TSV<br>(from Step 2)")] --> PREFLIGHT["Bounded iBAR preflight<br>strand, length, support warnings"]
+    PREFLIGHT --> CHUNK["Read in chunks<br>(100K rows)"]
+    REF --> PREFLIGHT
     REF[("gRNA/iBAR<br>Reference")] --> MATCHERS["Build<br>NeighborhoodMatchers"]
 
     subgraph WorkerPool["Multiprocessing Pool (8 workers)"]

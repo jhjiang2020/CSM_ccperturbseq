@@ -16,6 +16,7 @@
 # NOTE: -t (array range) and -o (log dir) are set dynamically by submit_pipeline.sh
 
 set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1
 
 # --- Configuration ---
 if [[ -n "${CSM_CONFIG:-}" ]]; then
@@ -42,6 +43,7 @@ CONDA_ENV="${_CONDA_ENV}"
 [[ -x "${CONDA_PREFIX}/condabin/conda" ]] || { echo "ERROR: Missing configured Conda: ${CONDA_PREFIX}/condabin/conda" >&2; exit 1; }
 eval "$(${CONDA_PREFIX}/condabin/conda shell.bash hook)"
 conda activate "${CONDA_ENV}"
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 
 LOG_DIR=$(python3 -c "import yaml; print(yaml.safe_load(open('${CONFIG}'))['paths'].get('log_dir', '${PROJECT_DIR}/logs'))")
 mkdir -p "${LOG_DIR}"
@@ -68,7 +70,7 @@ echo "  Cores:      ${NSLOTS:-8}"
 echo "=========================================="
 
 # --- Run ---
-python "${SCRIPTS_DIR}/03_match_grna_ibar.py" \
+python -u "${SCRIPTS_DIR}/03_match_grna_ibar.py" \
     --config "${CONFIG}" \
     --library "${LIB_NAME}" \
     --n_processes "${NSLOTS:-8}"

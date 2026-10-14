@@ -10,6 +10,10 @@ logic is in [docs/DETAILED_WORKFLOW.md](docs/DETAILED_WORKFLOW.md); v1.4 is
 covered by the [operating guide](docs/GEX_DECONTAMINATION_V1_4.md) and
 [QC guide](docs/GEX_GRNA_CONTAMINATION_QC.md).
 
+v1.5 adds early iBAR reference diagnostics and Step 3 scaling controls. See the
+[v1.5 release notes](RELEASE_NOTES.md#v15--ibar-preflight-and-step-3-scaling-2026-10-14)
+and [preflight/scaling guide](docs/SCALABILITY_AND_PREFLIGHT.md).
+
 ## Quick start
 
 ### 1. Install the production environment
@@ -168,6 +172,16 @@ different dataset can justify a measured override. More slots also reserve
 more total memory because `memory_per_slot_gb` is per slot. The legacy
 `splitpipe.threads` config field does not control the current UGER Step 1a
 wrapper; `uger.step1a.slots` is authoritative.
+
+Step 3 now checks a bounded read sample for possible iBAR strand, length, and
+reference misspecification before starting its matching workers. Existing
+configs enable this automatically; warnings and sample counts appear in the
+job log and `grna_matches/<library>_preflight.yaml`. A standalone raw-R1 check
+can run before any production processing with `--preflight-only
+--preflight-fastq`. Optional `uger.step3` overrides use the same resource keys
+as Step 1a; omitted values retain 8 slots, 4 GB per slot, and 12 hours. See
+[preflight usage and the pipeline scaling review](docs/SCALABILITY_AND_PREFLIGHT.md)
+for early checks, resource examples, and the limits of adding more cores.
 
 ### 3. Initialize UGER and dry-run
 

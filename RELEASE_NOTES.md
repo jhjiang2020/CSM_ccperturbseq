@@ -5,6 +5,65 @@ the [README quick start](README.md); architecture is summarized in
 [pipeline_overview.md](pipeline_overview.md), and implementation details are in
 the [step-by-step workflow](docs/DETAILED_WORKFLOW.md).
 
+## v1.5 — iBAR Preflight and Step 3 Scaling (2026-10-14)
+
+This release adds early checks for possible iBAR reference misspecification
+and improves Step 3 resource control and memory behavior for large libraries
+and deep sequencing. Existing configs retain their matching settings and
+resource defaults. See the [preflight and scaling guide](docs/SCALABILITY_AND_PREFLIGHT.md)
+for usage, optional configuration, and the review of all pipeline stages.
+
+**Early iBAR diagnostics**
+
+- Step 3 automatically samples up to 10,000 reads per sublibrary before
+  starting matching workers or opening production match files. It compares
+  exact iBAR support for the stored and reverse-complemented reference both
+  globally and conditional on an exact guide match.
+- Flushed log warnings flag possible strand reversal, incompatible iBAR
+  lengths, empty/invalid reference iBARs, low reference support, and low
+  structure-extraction support. Shared guides, multiple iBARs per guide, and
+  strand-neutral sequences are handled explicitly; sparse evidence is
+  reported as inconclusive. No-iBAR mode skips the check.
+- Each library writes `grna_matches/<library>_preflight.yaml` with sample
+  counts, reference context, and diagnostic messages. Warnings are advisory:
+  production continues using the configured reference and thresholds.
+- Added `--preflight-only` for diagnostics without production matching and
+  `--preflight-fastq` to check raw gRNA R1 before Step 2 or the full pipeline.
+  Optional `grna_matching.preflight.enabled` and `sample_reads` settings
+  control automatic checking; existing configs enable it by default.
+- Diagnostics explain that Step 3 reads the existing reference CSV. Changing
+  the Step 0 `design.rev_comp_ibar` flag alone does not repair that CSV, and
+  no automatic reference correction is performed.
+
+**Step 3 execution and resources**
+
+- Bound submitted, unconsumed chunks to twice the worker count so completed
+  results cannot accumulate with sequencing depth behind a slower gzip writer.
+  Input parsing selects only the five required columns and preserves strings.
+- Removed unused parent-process fuzzy matchers. Actual matchers still
+  initialize once per worker. The distance-two fallback stops when two
+  distinct references prove an ambiguity, preserving matching decisions.
+- Progress is flushed after the first completed chunk and subsequently every
+  ten chunks. The UGER worker uses unbuffered Python and pins numerical-library
+  threads to one per matching process.
+- The master launcher accepts optional `uger.step3.slots`,
+  `memory_per_slot_gb`, and `runtime_hours`, with matching CPU binding and
+  `NSLOTS`-based worker counts. Defaults remain 8 slots, 4 GB per slot
+  (32 GB total), and 12 hours. Direct worker submissions retain their existing
+  directives unless overridden at `qsub` submission.
+
+**Compatibility and validation**
+
+- Existing config files, library arrays, matching output columns, barcode
+  correction, UMI grouping/collapse, and AnnData schemas are retained.
+- Added a stage-by-stage scaling review identifying where additional cores,
+  memory, or a future code refactor would help; larger Step 0/2/4/5 refactors
+  are recommendations rather than changes in this release.
+- Thirty synthetic regression tests passed in the production `splitpipe`
+  environment on UGER, covering warning detection, standalone raw-R1 checks,
+  bounded work submission, exhaustive fuzzy-match agreement, serial/parallel
+  output agreement, resource overrides, and Step 1c compatibility.
+
 ## v1.4 — Pre-STAR GEX gRNA Decontamination (2026-07-17)
 
 This release adds an optional, auditable GEX decontamination path while keeping

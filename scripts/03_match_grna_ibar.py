@@ -32,12 +32,17 @@ import os
 import sys
 import time
 from collections import Counter, defaultdict
-from multiprocessing import Pool
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import yaml
+
+try:
+    from scripts.grna_preflight import check_ibar_reference, preflight_options, print_preflight
+except ModuleNotFoundError:
+    from grna_preflight import check_ibar_reference, preflight_options, print_preflight
 
 
 def resolve_output_root(output_dir, output_namespace=None):
@@ -333,6 +338,10 @@ class NeighborhoodMatcher:
                 best_dist = d
                 best_indices = [idx]
             elif d == best_dist:
+                # Distance <=1 was exhausted. Two distinct distance-2 hits
+                # prove an irreducible tie; remaining references cannot fix it.
+                if d == 2 and self.seqs[idx] != self.seqs[best_indices[0]]:
+                    return None, 2, False
                 best_indices.append(idx)
 
         if best_dist <= self.max_dist and len(best_indices) >= 1:
@@ -669,7 +678,7 @@ def sample_truncated_lengths(barcode_tsv_path, tso_seq, stem1, grna_lengths,
 # Chunk processing for multiprocessing
 # ---------------------------------------------------------------------------
 
-# Module-level worker state — set once per worker via Pool(initializer=)
+# Module-level worker state — set once per worker via its initializer
 _worker_state = {}
 
 
@@ -1130,7 +1139,11 @@ def process_chunk(args):
 
 def _chunk_generator(barcode_tsv_path, chunk_size):
     """Yield lightweight row-tuples from a (possibly gzipped) TSV, in chunks."""
-    for chunk_df in pd.read_csv(barcode_tsv_path, sep='\t', chunksize=chunk_size):
+    for chunk_df in pd.read_csv(
+        barcode_tsv_path, sep='\t', chunksize=chunk_size,
+        usecols=['read_id', 'bc_wells', 'bc_bci', 'umi', 'r1_seq'],
+        dtype=str, keep_default_na=False,
+    ):
         rows = list(zip(
             chunk_df['read_id'].values,
             chunk_df['bc_wells'].values,
@@ -1139,6 +1152,28 @@ def _chunk_generator(barcode_tsv_path, chunk_size):
             chunk_df['r1_seq'].values,
         ))
         yield rows
+
+
+def _bounded_results(executor, function, items, max_pending):
+    """Bound queued work AND completed results while the parent writes output."""
+    if max_pending < 1:
+        raise ValueError('max_pending must be positive')
+    iterator = iter(items)
+    sentinel = object()
+    pending = set()
+    for _ in range(max_pending):
+        item = next(iterator, sentinel)
+        if item is sentinel:
+            break
+        pending.add(executor.submit(function, item))
+    while pending:
+        done, pending = wait(pending, return_when=FIRST_COMPLETED)
+        while done:
+            future = done.pop()
+            yield future.result()
+            item = next(iterator, sentinel)
+            if item is not sentinel:
+                pending.add(executor.submit(function, item))
 
 
 # ---------------------------------------------------------------------------
@@ -1183,13 +1218,17 @@ def process_library(barcode_tsv_path, output_path, config_dict, n_processes=1,
 
     Optimizations over the naive approach:
       - Worker state (matchers, lookup dicts) initialized ONCE per process
-        via Pool(initializer=), not pickled per chunk.
+        via the worker initializer, not pickled per chunk.
       - Chunks are streamed as lightweight tuples, not full DataFrames.
       - Results are written incrementally to avoid accumulating everything
         in memory.
       - Progress output in both single and multi-process modes.
     """
     t_start = time.time()
+    if n_processes < 1 or chunk_size < 1:
+        raise ValueError('n_processes and chunk_size must be positive')
+    print(f"  Matching: {n_processes} worker(s), {chunk_size:,} reads/chunk; "
+          f"at most {2 * n_processes} chunks in flight", flush=True)
 
     total_stats = Counter()
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -1248,16 +1287,16 @@ def process_library(barcode_tsv_path, output_path, config_dict, n_processes=1,
                 matched = total_stats['exact_match'] + total_stats['fuzzy_match'] + total_stats['grna_only_match']
                 match_pct = matched / processed * 100 if processed > 0 else 0
                 print(f"    Chunk {i+1}: {processed:,} reads "
-                      f"({rate:,.0f}/s, {match_pct:.1f}% matched)")
+                      f"({rate:,.0f}/s, {match_pct:.1f}% matched)", flush=True)
         finally:
             fout.close()
             if fout_failed:
                 fout_failed.close()
     else:
-        # Multi-process: initialize workers via Pool(initializer=)
-        pool = Pool(processes=n_processes,
-                    initializer=_init_worker,
-                    initargs=(config_dict,))
+        # Bound pending chunks so a fast reader/worker cannot outrun gzip output.
+        pool = ProcessPoolExecutor(max_workers=n_processes,
+                                   initializer=_init_worker,
+                                   initargs=(config_dict,))
         fout = _open_out(output_path)
         fout_failed = _open_out(discarded_path) if save_failed else None
         try:
@@ -1268,7 +1307,9 @@ def process_library(barcode_tsv_path, output_path, config_dict, n_processes=1,
             chunks_done = 0
             chunk_iter = _chunk_generator(barcode_tsv_path, chunk_size)
 
-            for results, discarded, stats in pool.imap_unordered(_process_rows, chunk_iter):
+            for results, discarded, stats in _bounded_results(
+                pool, _process_rows, chunk_iter, max_pending=2 * n_processes
+            ):
                 total_stats += stats
                 chunks_done += 1
 
@@ -1282,8 +1323,8 @@ def process_library(barcode_tsv_path, output_path, config_dict, n_processes=1,
                         fout_failed.write('\t'.join(str(x) for x in d) + '\n')
                     n_discarded_total += len(discarded)
 
-                # Progress every 10 chunks
-                if chunks_done % 10 == 0:
+                # Report the first completed chunk, then every 10 chunks.
+                if chunks_done == 1 or chunks_done % 10 == 0:
                     processed = total_stats['total_reads']
                     elapsed = time.time() - t_start
                     rate = processed / elapsed if elapsed > 0 else 0
@@ -1293,13 +1334,12 @@ def process_library(barcode_tsv_path, output_path, config_dict, n_processes=1,
                     match_pct = matched / processed * 100 if processed > 0 else 0
                     print(f"    Chunks {chunks_done}: "
                           f"{processed:,} reads ({rate:,.0f}/s, "
-                          f"{match_pct:.1f}% matched)")
+                          f"{match_pct:.1f}% matched)", flush=True)
         finally:
             fout.close()
             if fout_failed:
                 fout_failed.close()
-            pool.close()
-            pool.join()
+            pool.shutdown(wait=True, cancel_futures=True)
 
     elapsed = time.time() - t_start
     print(f"  Completed in {elapsed:.1f}s "
@@ -1320,6 +1360,14 @@ def main():
     parser.add_argument("--n_processes", type=int, default=None)
     parser.add_argument("--chunk_size", type=int, default=100_000)
     parser.add_argument(
+        '--preflight-only', action='store_true',
+        help='Check a bounded read sample and write diagnostics without production matching.',
+    )
+    parser.add_argument(
+        '--preflight-fastq', action='store_true',
+        help='With --preflight-only, sample raw gRNA R1 FASTQs before Step 2 exists.',
+    )
+    parser.add_argument(
         "--barcode-input", default=None,
         help=("Explicit barcode-evidence TSV for one library. Production Step 1c "
               "passes the compact corrected-barcode evidence emitted by Step 1a."),
@@ -1330,6 +1378,8 @@ def main():
               "default keeps the historical output layout."),
     )
     args = parser.parse_args()
+    if args.preflight_fastq and (not args.preflight_only or args.barcode_input):
+        parser.error('--preflight-fastq requires --preflight-only and cannot use --barcode-input')
 
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
@@ -1338,7 +1388,11 @@ def main():
 
     gs = cfg['grna_structure']
     gm = cfg['grna_matching']
-    n_processes = args.n_processes or cfg['barcode_extraction'].get('n_processes', 1)
+    preflight_enabled, preflight_sample_reads = preflight_options(gm)
+    n_processes = (args.n_processes if args.n_processes is not None
+                   else cfg['barcode_extraction'].get('n_processes', 1))
+    if n_processes < 1 or args.chunk_size < 1:
+        parser.error('--n_processes and --chunk_size must be positive')
 
     single_guide_mode = gs.get('single_guide_mode', False)
     tso_seq = gs['fixed_seq_1']
@@ -1421,10 +1475,9 @@ def main():
     grna_seq_counts = grna_dedup.groupby('grna_seq')['grna_name'].count()
     shared_grna_seqs = grna_seq_counts[grna_seq_counts > 1]
 
-    print("  Building matchers...")
-    grna_matcher = NeighborhoodMatcher(unique_grna_seqs, unique_seq_ids, max_dist=gm['max_lev_dist'])
-    if ibar_length > 0:
-        ibar_matcher = NeighborhoodMatcher(ibar_seqs, ibar_seqs, max_dist=gm['max_lev_dist_ibar'])
+    print("  Reference lookup sizes (matchers initialize after preflight)...")
+    # Actual matchers are built once per worker, after preflight. Avoid a spare
+    # parent copy, which becomes substantial for large reference libraries.
     n_unique_grna = len(unique_grna_seqs)
     print(f"    gRNA: {n_unique_grna} unique sequences ({len(grna_dedup)} initial entries)")
     if len(shared_grna_seqs) > 0:
@@ -1479,12 +1532,39 @@ def main():
             barcode_tsv = os.path.join(output_dir, 'grna_barcodes', f"{lib_name}_barcodes.tsv.gz")
             if not os.path.exists(barcode_tsv):
                 barcode_tsv = os.path.join(output_dir, 'grna_barcodes', f"{lib_name}_barcodes.tsv")
-        if not os.path.exists(barcode_tsv):
+        if not args.preflight_fastq and not os.path.exists(barcode_tsv):
+            if args.preflight_only:
+                raise FileNotFoundError(f'{barcode_tsv} not found; use --preflight-fastq to check raw R1 before Step 2.')
             print(f"\n  WARNING: {barcode_tsv} not found — run Step 2 first!")
             continue
 
         output_path = os.path.join(output_dir, 'grna_matches', f"{lib_name}_grna_matches.tsv.gz")
         print(f"\n--- Library: {lib_name} ---")
+
+        if preflight_enabled or args.preflight_only:
+            fastq_paths = None
+            if args.preflight_fastq:
+                fastq_paths = sorted(Path(cfg['paths']['fastq_dir']).glob(
+                    f"*{lib['grna_prefix']}*_R1_*.fastq.gz"
+                ))
+                if not fastq_paths:
+                    raise FileNotFoundError(f"No gRNA R1 FASTQs found for {lib_name}: {lib['grna_prefix']}")
+            preflight = check_ibar_reference(
+                barcode_tsv, ref_df[['grna_seq', 'ibar_seq']].itertuples(index=False, name=None),
+                config_dict, extract_grna_ibar, sample_reads=preflight_sample_reads,
+                fastq_paths=fastq_paths,
+            )
+            preflight.update(library=lib_name, reference_path=cfg['paths']['grna_reference'],
+                             configured_ibar_length=ibar_length)
+            print_preflight(preflight, lib_name)
+            preflight_path = Path(output_dir) / 'grna_matches' / f'{lib_name}_preflight.yaml'
+            preflight_path.parent.mkdir(parents=True, exist_ok=True)
+            with preflight_path.open('w') as handle:
+                yaml.safe_dump(preflight, handle, sort_keys=False)
+        else:
+            print(f"  iBAR preflight [{lib_name}]: disabled by config", flush=True)
+        if args.preflight_only:
+            continue
 
         # Run 100k-read sampling to detect truncated gRNA lengths (short-read mode)
         if short_read_mode:
@@ -1565,6 +1645,9 @@ def main():
                 count = offsets[key]
                 print(f"      offset {offset:>3s}bp: {count:>10,} "
                       f"({count/stats.get('extracted', 1)*100:.1f}%)")
+    if args.preflight_only:
+        print('\n  Preflight complete; production matching was not started.', flush=True)
+        return
     lib_label = args.library if getattr(args, 'library', None) else "all"
     stats_path = os.path.join(output_dir, 'grna_matches', f'{lib_label}_matching_stats.yaml')
     os.makedirs(os.path.dirname(stats_path), exist_ok=True)
