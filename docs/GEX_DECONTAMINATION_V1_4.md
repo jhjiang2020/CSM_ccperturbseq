@@ -1,8 +1,19 @@
-# v1.4 GEX gRNA decontamination
+# GEX gRNA decontamination — current v2.0 guide
 
-v1.4 removes reference-supported gRNA contamination during split-pipe
-preprocessing, before the human STAR input FASTQ is finalized. Guide identity
-is deliberately handled in a separate optional Step 1c.
+Resource requests for every maintained stage are optional YAML settings; see
+[UGER resources](UGER_RESOURCES.md) for CPU/RAM/time defaults, array limits,
+site configuration and examples of increasing resources.
+
+This feature was introduced in v1.4; the filename is retained for existing
+links. In v2.0, reference-supported gRNA contamination is removed during Parse
+preprocessing **before either STAR or kallisto**. Guide identity is handled in
+separate optional Step 1c. Start with the [quick start](QUICKSTART.md) and
+[configuration reference](CONFIGURATION.md) for an independent installation;
+shared rgupta paths are optional.
+
+The numerical results below are the original controlled **STAR** experiments.
+They establish the filter's motivation and do not estimate kallisto alignment
+behavior or the optimized counter's runtime.
 
 The contamination originates upstream of sequencing. Universal reverse
 transcription uses both poly(A) probes and gRNA probes, producing long
@@ -48,8 +59,11 @@ The checksum/context checks are intentionally strict. If Parse is upgraded,
 locally edited, or still contains the earlier physical v1.4 patch, Step 1a
 stops before processing and reports the unexpected checksum. Restore a pristine
 Parse 1.6.4 tree rather than patching it. With
-`gex_decontamination.enabled: false`, Step 1a invokes the original executable
-directly and no overlay is installed.
+`gex_decontamination.enabled: false`, the filter hook is disabled. STAR with
+Parse-default UMI correction invokes the original executable; alternative GEX
+UMI modes still use their in-memory override, and kallisto still uses its native
+counting callback. Disabling decontamination does not disable those independent
+v2.0 options.
 
 ## Fresh v1.4 FASTQ start
 
@@ -64,8 +78,8 @@ Start from the public config matching the guide design, rather than adding only
 
 ```bash
 cd /medpop/rgupta/Jiahao/path/to/CSM_ccperturbseq
-cp config_dual.yaml my_fresh_v1_4.yaml
-# or: cp config_single.yaml my_fresh_v1_4.yaml
+cp config_dual.yaml my_fresh_v2.yaml
+# or: cp config_single.yaml my_fresh_v2.yaml
 ```
 
 Edit all `environment`, `paths`, `libraries`, `splitpipe`, guide-reference, and
@@ -80,7 +94,8 @@ gex_decontamination:
 ```
 
 `existing_alignment.enabled: false` makes this a fresh FASTQ run: survivors
-receive the v1.4 trimming policy and then proceed through human STAR. Keep
+receive the trimming policy and then proceed through the configured STAR or
+kallisto backend. Set `gex_alignment` using the [backend guide](KALLISTO_BACKEND.md). Keep
 Step 1c and guide-arm merging disabled until the identity-recovery criteria in
 [Configuration](#configuration) are appropriate for the actual R1 length. For
 a 100-cycle run, use the specific
@@ -92,7 +107,7 @@ and dependency requests, then submit Step 1:
 
 ```bash
 PROJECT_DIR=/medpop/rgupta/Jiahao/path/to/CSM_ccperturbseq
-CONFIG=/medpop/rgupta/Jiahao/path/to/my_fresh_v1_4.yaml
+CONFIG=/medpop/rgupta/Jiahao/path/to/my_fresh_v2.yaml
 cd "${PROJECT_DIR}"
 
 source /broad/software/scripts/useuse
@@ -115,11 +130,11 @@ raw paired GEX FASTQ
   → full TSO expected at offset 0; offsets 1–2 tolerate rare 5' damage/error
   → complete guide prefix matched against the reference
        exact first; otherwise verified Hamming distance 1
-  → filter positive: omit from STAR; retain corrected-barcode evidence for Step 1c
+  → filter positive: omit from the configured GEX aligner; retain corrected-barcode evidence for Step 1c
        and, by default, synchronized raw R1/R2 for provenance and QC
   → filter negative with full TSO: trim at detected full/fuzzy TSO endpoint
   → filter negative without full TSO: retain Parse exact-17-mer fallback trim
-  → surviving reads: barcode_head.fastq → human STAR
+  → surviving reads: barcode_head.fastq → STAR or native kallisto
   → ordinary split-pipe post → mol → dge → sub → ana → rep → clean
 ```
 
@@ -175,17 +190,17 @@ semantics. New configurations and the historical-BAM test use only
 
 ### Survivor TSO trimming
 
-The removal decision and STAR-survivor trimming use one ordered contract:
+The removal decision and survivor trimming use one ordered contract for both backends:
 
 ```text
-full TSO + reference-supported guide  → remove before STAR
+full TSO + reference-supported guide  → remove before GEX alignment
 full TSO + no supported guide         → trim at the full-TSO detector endpoint
 no full TSO + Parse exact 17-mer      → trim with Parse's original rule
 neither                               → leave R1 unchanged
 ```
 
 Thus a genuine short cDNA with a fuzzy full TSO is retained but no longer sends
-that TSO to STAR merely because an error occurred within Parse's terminal
+that TSO to the transcriptomic aligner merely because an error occurred within Parse's terminal
 17-mer. Partial-TSO cDNA retains Parse's historical exact-suffix behavior. The
 full-TSO call remains insufficient for removal by itself.
 
@@ -302,7 +317,9 @@ sources counts once.
 
 ## Existing split-pipe runs
 
-The safe route never overwrites the historical run or reruns STAR:
+This historical-alignment route is **STAR-only**. Set `gex_alignment.backend:
+star`; `existing_alignment.enabled: true` is rejected for kallisto. It never
+overwrites the historical run or reruns STAR:
 
 ```yaml
 gex_decontamination:
@@ -462,3 +479,18 @@ requested per slot, increasing `slots` also increases total reserved memory.
 Before production, run the pilot-derived QC module and enable
 `require_qc_policy` only after its filter policy has been reviewed and marked
 approved.
+
+## v2.0 backend and UMI boundary
+
+Filtering and the compact corrected-barcode evidence are shared by both GEX
+backends. `gex_alignment.umi_correction` governs transcriptomic molecules in
+Step 1a; it does not alter the gRNA directional collapse used by Step 4, including
+GEX-derived guide evidence. Enable `step1c` and source merging according to
+observable guide/iBAR identity, not according to the aligner choice.
+
+Kallisto has native BUS/count QC and no genomic BAM. The controlled STAR and
+historical-BAM audit sections of the [QC guide](GEX_GRNA_CONTAMINATION_QC.md)
+therefore remain STAR-specific. Use a new output root when comparing alignment,
+UMI or removal policies, and retain the enabled filter's completion manifest.
+See [migration](MIGRATING_TO_V2.md) and [execution](RUNNING.md) for current
+submission/dependency examples and output checks.

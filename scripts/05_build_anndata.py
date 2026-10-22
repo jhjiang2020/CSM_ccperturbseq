@@ -258,6 +258,19 @@ def main():
         )
 
     cfg = load_config(args.config)
+    alignment_cfg = cfg.get('gex_alignment', {}) or {}
+    if alignment_cfg.get('backend', 'star') == 'kallisto':
+        try:
+            from scripts.gex_alignment import validate_combined
+        except ModuleNotFoundError:
+            from gex_alignment import validate_combined
+        validate_combined(cfg, args.config)
+    else:
+        try:
+            from scripts.gex_alignment import validate_star_combined_policy
+        except ModuleNotFoundError:
+            from gex_alignment import validate_star_combined_policy
+        validate_star_combined_policy(cfg, args.config)
     output_dir = cfg['paths']['output_dir']
     assign_dir = os.path.join(output_dir, 'grna_assignment')
     decontam = cfg.get('gex_decontamination', {})
@@ -510,6 +523,10 @@ def main():
     print("\n  7. Adding pipeline metadata...")
     adata.uns['ccperturbseq_pipeline'] = {
         'analysis_name': cfg['analysis_name'],
+        'gex_alignment_backend': alignment_cfg.get('backend', 'star'),
+        'gex_umi_correction': alignment_cfg.get('umi_correction', 'parse'),
+        'gex_output_level': alignment_cfg.get('kallisto', {}).get('output_level', 'gene')
+            if alignment_cfg.get('backend', 'star') == 'kallisto' else 'gene',
         'kit': cfg['splitpipe']['kit'],
         'chemistry': cfg['splitpipe']['chemistry'],
         'guide_assignment_threshold': min_umi,

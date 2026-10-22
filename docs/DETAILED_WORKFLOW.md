@@ -1,13 +1,15 @@
-# Detailed Step-by-Step Workflow
+# v2.0 detailed workflow
 
-This document describes each processing stage, its inputs and outputs, matching
-and assignment decisions, and the UGER dependency graph. For setup and
-submission commands, begin with the [README quick start](../README.md#quick-start).
-Versioned behavior changes are tracked in the [release notes](../RELEASE_NOTES.md),
-and operational details for GEX decontamination are in the
-[v1.4 guide](GEX_DECONTAMINATION_V1_4.md). Read-recipe constraints and matching
-configurations are summarized in the
-[100-cycle Illumina sequencing note](ILLUMINA_100_CYCLE_SEQUENCING.md).
+Resource requests for every maintained stage are optional YAML settings; see
+[UGER resources](UGER_RESOURCES.md) for CPU/RAM/time defaults, array limits,
+site configuration and examples of increasing resources.
+
+This document describes each stage's inputs, outputs and counting logic. Start
+with the [quick start](QUICKSTART.md) for a new run; use the
+[configuration reference](CONFIGURATION.md) and [execution runbook](RUNNING.md)
+for settings, portable execution and restarts. Parse split-pipe 1.6.4 remains a
+dependency for both GEX backends and its installation stays unchanged.
+[Release notes](../RELEASE_NOTES.md) track historical changes.
 
 ## UGER Job Dependency Chain
 
@@ -20,7 +22,7 @@ flowchart TD
     S0["Step 0 (manual)"] --> S3_arr
 
     subgraph GEX["GEX Branch"]
-        S1a["Step 1a: split-pipe<br>(array ×N)"]
+        S1a["Step 1a: Parse pre + STAR or kallisto<br>(array ×N)"]
         S1b["Step 1b: combine"]
         S1c["Step 1c: GEX guide identity<br>(optional array + aggregate)"]
         S1a --> S1b
@@ -31,6 +33,7 @@ flowchart TD
         S2_arr["Step 2: Extract BCs<br>(array ×N)"]
         S3_arr["Step 3: Match gRNA+iBAR<br>(array ×N)"]
         S4["Step 4: Assign/merge to cells<br>(1 job, 4 CPUs)"]
+        S1a --> S2_arr
         S2_arr --> S3_arr --> S4
     end
 
@@ -43,8 +46,10 @@ flowchart TD
 ```
 
 > [!TIP]
-> GEX and gRNA branches run in **parallel** — they only merge at Step 5.
-> You can test guide extraction and assignment with different parameters by re-runing Step 3, 4 and 5 with modified `config.yaml`.
+> When Steps 1 and 2 are submitted together, the launcher makes Step 2 wait for
+> Step 1a. Step 1b and the guide branch can then progress independently; optional
+> Step 1c also joins Step 4 when enabled. Matching/assignment changes generally
+> require rebuilding Steps 3–5, not relabeling the old outputs.
 
 ---
 
@@ -87,7 +92,7 @@ When run with `--config`, Step 0 automatically checks whether the configured `ma
 
 | Zone | Condition | Impact |
 |------|-----------|--------|
-| **CRITICAL** | d(A,B) ≤ max_lev_dist | A read from ref A with ≤max_lev_dist errors matches ref B equally → **guaranteed ambiguity**. Read is **discarded** (not mis-assigned). |
+| **CRITICAL** | d(A,B) ≤ max_lev_dist | References are close enough for errors to create competing or incorrect nearest matches; review thresholds/reference identity. |
 | **WARNING** | max_lev_dist < d(A,B) ≤ 2×max_lev_dist | Error balls partially overlap — some error-prone reads may fall in the overlap region and be lost. |
 | **SAFE** | d(A,B) > 2×max_lev_dist | No overlap possible. |
 
@@ -104,82 +109,105 @@ python scripts/00_format_reference.py --check-only references/grna_ibar_referenc
 ```
 
 > [!NOTE]
-> Step 3's `NeighborhoodMatcher` always returns the **unique best match**. When multiple references tie at the same best distance, the read is marked **ambiguous** and discarded — there is no risk of wrong assignment, only data loss. Users can safely proceed with overlapping references if they accept some ambiguous-read loss (visible in Step 3 QC as "% ambiguous").
+> Step 3 reports ties at the best distance as ambiguous. A unique nearest match
+> is not proof of the true biological source if sequencing errors move a read
+> closer to another reference. Review reference separation, orientation and
+> matching QC rather than treating an overlap warning as harmless.
 
 
 ---
 
-## Step 1: GEX Processing (split-pipe)
+## Step 1: GEX preprocessing, alignment and counting
 
-**Script**: [01_run_gex_splitpipe.sh](../scripts/01_run_gex_splitpipe.sh)
+**Entry points:** [Step 1a worker](../submit/submit_step1a_gex_array.sh) →
+[Step 1b combine worker](../submit/submit_step1b_gex_combine.sh), plus optional
+Step 1c. Submit with `submit/submit_pipeline.sh --step 1`. The historical
+`01_run_gex_splitpipe.sh` delegates to that UGER launcher; it is not a portable
+local runner. [Portable execution](RUNNING.md#another-scheduler-or-an-existing-linux-allocation).
 
-**UGER**: Step 1a (array ×N) → Step 1b (combine), plus optional Step 1c
+### Step 1a: shared Parse preprocessing
 
-The assay's universal reverse-transcription reaction contains both poly(A)
-probes and gRNA probes. Long gene-transcript cDNA and short gRNA products are
-therefore created together and separated later by size. Step 1a decontamination
-targets the small amount of short gRNA product that escapes into the GEX size
-fraction. Pilot C1/C2 raw scans measured approximately 32–37 structural
-contaminants per million reads; this is low in absolute terms but can materially
-bias a target gene expressed at a similar or lower rate if STAR assigns the
-guide-derived sequence to that gene.
+Parse supplies kit/chemistry definitions, R2 barcode correction, RT/barcode-index
+identity and sample information. The optional GEX gRNA filter acts in this
+preprocessing pass before either transcriptomic backend. It requires a full/fuzzy
+TSO near the GEX R1 start and a complete reference-supported guide; TSO alone
+never causes removal. Survivors use the full-TSO-endpoint trim when detected,
+otherwise Parse's exact terminal-17-mer fallback.
 
-When enabled, Step 1a installs a checksum-validated runtime overlay over the
-pristine split-pipe 1.6.4 preprocessing and molinfo modules; it does not edit
-the Parse installation. TSO-bearing reads are screened with a packed guide
-index. A complete guide match at Hamming distance 0 or 1 is removed before the
-human STAR input is written. For filter-negative reads, a detected full/fuzzy
-TSO is trimmed at its full endpoint; without a full-TSO call, Parse's original
-exact terminal 17-mer rule remains the fallback. The full-TSO call alone never
-causes removal.
+Valid corrected-barcode filter positives are written as compact evidence, with
+synchronized raw rejected pairs retained according to config. No second barcode
+calibration is performed on rejected reads. The validated runtime overlay does
+not modify Parse source files. [Full filter policy](GEX_DECONTAMINATION_V1_4.md).
 
-Step 1a is deliberately removal-only, but it emits a compact table for every
-valid-barcode filter positive using split-pipe's already-corrected cell
-barcode, pB, UMI, R1 sequence, and quality. Optional Step 1c runs ordinary
-Step 3 only on that table, applies stricter guide/iBAR acceptance thresholds,
-and can pass the conservative subset to Step 4. It never rescans the full GEX
-FASTQs or recalibrates barcodes from rejected reads. The array size N follows
-`config.yaml`.
+### Step 1a: select the transcriptomic backend
 
 ```mermaid
 flowchart TD
-    subgraph Step1a["Step 1a: Per-sublibrary (array ×N)"]
-        FQ[("GEX FASTQ<br>R1 + R2")] --> PRE["split-pipe pre<br>R2 correction + TSO route"]
-        PRE --> FILT{"full TSO + packed guide hit<br>Hamming 0/1?"}
-        FILT -->|No| TRIM{"full/fuzzy TSO?"}
-        FILT -->|Yes| EV[("corrected barcode evidence<br>+ optional raw R1/R2")]
-        TRIM -->|Yes| FULLTRIM["trim at full-TSO endpoint"]
-        TRIM -->|No| PARSETRIM["Parse exact-17-mer fallback"]
-        FULLTRIM --> STAR["human STAR"]
-        PARSETRIM --> STAR
-        STAR --> SP["split-pipe<br>mol → downstream"]
-        SP --> GEX[("gex_sublib_1/<br>gex_sublib_2/...")]
-    end
-
-    EV -. optional Step 1c .-> ID["ordinary Step 3 → strict subset → Step 4<br>GEX-only guide matrix"]
-
-    subgraph Step1b["Step 1b: Combine"]
-        GEX --> COMB["split-pipe<br>--mode comb"]
-        COMB --> OUT[("gex_combined/<br>adata.h5ad")]
-    end
-
-    style FQ fill:#e3f2fd
-    style OUT fill:#c8e6c9
+    RAW[Raw GEX pairs] --> PRE[Parse preprocessing + optional guide filter]
+    PRE --> SURV[Corrected survivor FASTQ]
+    PRE -. compact guide evidence .-> ID[Optional Step 1c]
+    SURV --> CHOICE{gex_alignment.backend}
+    CHOICE -->|star: default| STAR[STAR → Parse molecules/DGE]
+    CHOICE -->|kallisto| BUS[kallisto BUS equivalence classes]
+    BUS --> NATIVE[Native gene resolution + UMI families]
+    NATIVE --> OUTPUT[Sparse matrices, metadata, H5AD]
+    STAR --> OUTPUT
+    OUTPUT --> COMB[Step 1b: matching backend combine]
 ```
 
-At 54-bp R1, a 30-bp TSO plus a complete 20/21-bp guide is observable, so
-removal remains supported. An intact GEX-derived contaminant starts at offset
-0; the configured offsets 1–2 only tolerate rare 5' damage/sequencing error.
-A standard dual-guide stem plus 7-bp iBAR is not observable at that length;
-Step 1c warns and does not invent identity. Single-guide/no-iBAR mode uses the
-existing v1.2 short-read logic.
+The defaults are `backend: star`, `umi_correction: parse`. On either backend:
 
-For a historical compatible split-pipe BAM, Step 1a can instead preprocess raw
-reads in a new sandbox, remove all records for filter-positive QNAMEs from the
-name-sorted/annotated source BAM, and resume at `--mode mol`. This route avoids
-STAR but cannot retroactively apply the new full/fuzzy-TSO survivor trimming;
-that benefit requires a fresh alignment. See the
-[v1.4 guide](GEX_DECONTAMINATION_V1_4.md#existing-split-pipe-runs).
+| Flavor | GEX neighbor correction |
+| --- | --- |
+| `parse` | Parse 1.6.4 strict abundance, Hamming one, non-transitive; ties stay separate. |
+| `directional` | Fixed-count Hamming-one graph using `n_high >= 2*n_low - 1`, with bustools-compatible traversal. |
+| `none` | Exact UMI grouping only; no merging between different UMI strings. |
+
+These settings do not change Step 4 gRNA correction. With STAR, the default
+kernel is original Parse; alternative flavors override its function in memory.
+With kallisto, `run_kallisto_gex.py` consumes native BUS evidence and retains
+Parse's initialized sample masks and cell-calling algorithm through a runtime
+DGE callback. It never projects pseudoalignments into a BAM for gene counting.
+
+Kallisto defaults to unique gene assignment. Optional fractional assignment
+resolves compatible candidate genes and apportions unresolved molecules equally.
+`output_level: both` adds a target matrix while keeping genes primary;
+`transcript` selects targets as the primary expression matrix. Whole gene-molecule
+totals drive cell calling, with fractional roundoff excluded from cutoffs.
+Molecules with unresolved target intersections may still have valid gene counts.
+[Detailed semantics](KALLISTO_BACKEND.md#molecule-semantics).
+
+The native counter shards complete corrected barcodes across allocated workers,
+caches reference/EC annotations, and merges in original barcode order. Primer/
+barcode-index identities remain separate until molecule collapse is complete.
+`count_threads: 0` uses allocated cores; a positive cap or serial `1` can be
+selected. Scientific counts are preserved across serial/parallel execution.
+
+### Step 1b: combine and validate
+
+The combine worker selects the backend automatically. STAR uses the existing
+Parse combine wrapper, including in-memory compatibility handling for sample
+pools/list initialization. Kallisto uses `combine_kallisto_gex.py`, preserving
+sparse feature order and fractional values. Completion/policy checks reject
+mixed or stale backend/UMI/reference outputs. Both supply
+`gex_combined/<sample>/DGE_filtered/anndata.h5ad` for Step 5. The kallisto backend
+also exports unfiltered and optional target products; it does not fabricate
+STAR BAMs, coordinate QC, or exonic fractions.
+
+### Optional Step 1c and historical STAR reuse
+
+Step 1c runs the ordinary Step 3 matcher on compact filter evidence, then applies
+stricter acceptance before the GEX-only/combined guide products. At 54–60 nt R1,
+standard dual-guide GEX reads can support contaminant removal but do not reach
+the full stem+iBAR needed for identity. Keep Step 1c/source merging disabled
+for that identity model. Single-guide/no-iBAR recovery has separate short-read
+logic. [Sequencing scenarios](ILLUMINA_100_CYCLE_SEQUENCING.md).
+
+Compatible historical STAR BAMs can be harmonized in a new sandbox and resumed
+at Parse `mol`, without rerunning STAR. Raw FASTQs are still required; new
+survivor trimming cannot be applied retroactively to already aligned reads.
+This route is STAR-only and cannot be combined with kallisto.
+[Historical-BAM instructions](GEX_DECONTAMINATION_V1_4.md#existing-split-pipe-runs).
 
 ---
 
@@ -187,7 +215,8 @@ that benefit requires a fresh alignment. See the
 
 **Script**: [02_extract_grna_barcodes.py](../scripts/02_extract_grna_barcodes.py)
 
-**UGER**: Array ×N, 32GB RAM, 8 processes
+**UGER**: Array ×N, 1 CPU and 4 GB per task. The current per-library FASTQ loop
+is serial; `barcode_extraction.n_processes` does not make it an eight-worker job.
 
 Extracts cell barcodes from gRNA library R2 using Parse Biosciences barcode correction logic, producing a TSV linking each read to its cell identity.
 
@@ -311,7 +340,9 @@ flowchart TD
 
 **Script**: [04_assign_grna_to_cells.py](../scripts/04_assign_grna_to_cells.py)
 
-**UGER**: 1 job, 32GB RAM, 4 CPUs (parallelized per library)
+**UGER**: 1 job, 4 CPUs at 32 GB per slot (**128 GB total**). Dedicated-only
+libraries can run independently; guide-source union and final assignment have
+serial phases.
 
 Collapses read-level matches to cell-level gRNA assignments via **streaming UMI deduplication**.
 
@@ -336,7 +367,7 @@ flowchart TD
     ASSIGN --> MATRIX["Build sparse<br>cells × guides matrix"]
 
     ASSIGN --> OUT1[("grna_cell_assignment.csv")]
-    CONCAT --> OUT2[("grna_umi_counts.csv")]
+    CONCAT --> OUT2[("grna_umi_counts.csv.gz")]
     MATRIX --> OUT3[("grna_umi_matrix.mtx")]
     CONCAT --> OUT4[("umi_threshold_sensitivity.png")]
     ACCUM --> OUT5[("reads_per_umi_distribution.png")]
@@ -393,17 +424,16 @@ In dual-guide mode (`dual_guide_mode: true`), the pipeline determines pair compl
 
 **Script**: [05_build_anndata.py](../scripts/05_build_anndata.py)
 
-**UGER**: 1 job, 16GB RAM
+**UGER**: 1 job, 1 CPU and 32 GB RAM
 
 Merges GEX expression data with gRNA assignments into a single analysis-ready AnnData.
 
-> [!NOTE]
-> **Split-Pipe Combine Fixes (Wrapper Script)**
-> The `split-pipe` tool has two bugs/limitations when combining sublibraries:
-> 1. It initializes an empty well list with `[] * 3` instead of `[[], [], []]`, causing an `IndexError` when merging mismatching sublibrary setups.
-> 2. Re-defining sample pools (e.g. pooling C1 and C2 into "Control") normally requires a complete Step 1a rerun; retain the configurable 48-hour UGER limit for large inputs.
->
-> The pipeline bypasses both issues using the [splitpipe_wrapper.py](../scripts/splitpipe_wrapper.py) script. This wrapper dynamically patches `run_proc_def.json` files on the fly to sync sample names with `config.yaml`, and then monkey-patches `spsamp.SpSamp.__init__` in memory before launching `split-pipe`, saving roughly 24 hours of re-computation.
+Step 5 validates the expression backend/policy and combined-output contract,
+loads each configured sample's called-cell matrix and maps sample-local barcode
+suffixes back to the configured sublibrary order. It adds guide calls and aligns
+sparse guide matrices to those cells. It does not convert STAR output to
+kallisto or recompute expression molecules. Fractional native counts remain
+fractional. Primary feature level follows the Step 1 gene/target choice.
 
 ```mermaid
 flowchart TD
@@ -434,28 +464,32 @@ flowchart TD
 
 | Layer | Content |
 |---|---|
-| `adata.X` | GEX count matrix (cells × genes) |
+| `adata.X` | Expression matrix (cells × primary genes/targets); native kallisto values are raw UMI weights |
 | `adata.obs` | Dual-guide metadata: `target_combo`, `pair_id`, `combo_type`, `detection_status`, `pos1_grna`, `pos2_grna`, `inferred_pos*_grna`, `has_grna` |
 | `adata.obs` | Sublibrary metadata: `sublib_index` (Parse combinatorial ID), `sublibrary` (e.g., C1/T1/C2), `sample_specific` |
 | `adata.obsm['gRNA_counts']` | Sparse UMI count matrix (cells × independent gRNAs) |
 | `adata.uns['gRNA_names']` | Guide name list matching matrix columns |
 | `adata.uns['guide_annotations']` | Design-level annotations per individual guide |
-| `adata.uns['ccperturbseq_pipeline']` | Pipeline parameters snapshot |
+| `adata.layers['counts']` | Native kallisto raw expression counts, preserved through integration |
+| `adata.uns['ccperturbseq_pipeline']` | Pipeline snapshot, including `gex_alignment_backend`, `gex_umi_correction`, `gex_output_level` and guide-source choices |
 
 ---
 
 ## Configuration Reference
 
-Key sections of [config.yaml](../config.yaml):
+The [configuration reference](CONFIGURATION.md) is the complete current guide.
+Public templates are [dual](../config_dual.yaml) and [single](../config_single.yaml);
+replace their example paths and library entries. Key sections:
 
 | Section | Key Parameters |
 |---|---|
-| `gex_decontamination` | pre-STAR removal, TSO/guide thresholds, raw reject retention, optional Step 1c/source merge, and existing-alignment sandbox |
+| `gex_alignment` | STAR/kallisto backend, common GEX UMI flavor, native gene/target assignment and worker cap |
+| `gex_decontamination` | pre-alignment removal for both backends, TSO/guide thresholds, raw reject retention, optional Step 1c/source merge, and existing-alignment sandbox |
 | `grna_structure` | `fixed_seq_1` (TSO), `fixed_seq_2/3` (stems), `grna_lengths: [20, 21]`, `ibar_length: 7` |
 | `grna_matching` | `max_lev_dist: 3`, `max_lev_dist_ibar: 2`, `save_failed_reads: false` |
 | `guide_assignment` | `dual_guide_counting_mode: true`, `min_umi_threshold: 5`, `umi_dedup_ibar: true`, `max_umi_edits: 1`, `min_reads_per_umi: 1`, `compute_saturation_curve: true` |
-| `barcode_extraction` | `bc_max_edit_dist: 1`, `n_processes: 8` |
-| `libraries` | 4 sublibraries: C1, C2, T1, T2 (2 Control + 2 Treatment) |
+| `barcode_extraction` | `bc_max_edit_dist: 1`, `n_processes: 8` (legacy; current Step 2 is serial) |
+| `libraries` | Any configured library count; public C1/C2/T1/T2 entries are examples, not a fixed requirement |
 
 ## UGER Resource Allocations
 
@@ -470,20 +504,24 @@ Key sections of [config.yaml](../config.yaml):
 | 4 (Assignment) | 32GB/slot | 4 | 4h | Single |
 | 5 (AnnData) | 32GB | 1 | 4h | Single |
 
-Step 1a values come from `uger.step1a.slots`,
-`uger.step1a.memory_per_slot_gb`, and `uger.step1a.runtime_hours`. The launcher
-uses the slot count for both `-pe smp` and `-binding linear`, and split-pipe
-derives its thread count from `NSLOTS`. The slot count is configurable rather
-than hardcoded; the legacy `splitpipe.threads` field is not the current UGER
-Step 1a resource control.
+These are backward-compatible defaults. Every row is tunable through
+`uger.<profile>.slots`, `memory_per_slot_gb` and `runtime_hours`; arrays also
+accept `max_concurrent`. Profiles are `step1a`, `step1b`, `step1c`,
+`step1c_aggregate`, `step2`, `step3`, `step4` and `step5`. Common queue, OS,
+parallel environment and accounting settings use the same interface. See
+[UGER resources](UGER_RESOURCES.md) for complete YAML examples, QC/reference
+profiles, inherited configs, submission records and tuning decisions.
 
-The 48-hour default is recommended for large or multi-lane GEX inputs. Verify
-the resolved `-pe`, `-binding`, `h_vmem`, and `h_rt` values with
-`submit/submit_pipeline.sh --dry-run`. Sixteen is the recommended starting
-point because Parse 1.6.4 caps preprocessing at eight workers, the full-C2 job
-averaged about 5.2 cores, and memory had ample headroom. Users may change the
-slot count when STAR or another phase benefits on their workload; confirm that
-with UGER accounting and remember that total reserved memory scales with
-slots.
+The launcher binds the requested cores and workers consume `NSLOTS` where
+parallelism exists. Step 2's FASTQ loop and most of Step 5 remain serial;
+requesting extra slots there does not automatically parallelize them. Increase
+memory/time independently for a larger dataset. `splitpipe.threads` and
+`barcode_extraction.n_processes` are retained legacy fields, not scheduler
+requests. Verify every resolved request using `submit_pipeline.sh --dry-run`.
+
 
 ---
+
+For current submission/portable examples, per-slot memory totals, success checks
+and restart decisions, use [the execution runbook](RUNNING.md). Historical
+STAR preprocessing measurements do not characterize native kallisto counting.

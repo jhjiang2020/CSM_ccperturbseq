@@ -12,8 +12,10 @@
 #$ -l h_vmem=32G
 #$ -l h_rt=4:00:00
 #$ -pe smp 1
+#$ -binding linear:1
 
 set -euo pipefail
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 
 # --- Configuration ---
 if [[ -n "${CSM_CONFIG:-}" ]]; then

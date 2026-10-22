@@ -1,10 +1,19 @@
 .agents/
 __pycache__/
 *.pyc
+# Agent-facing docs and config stay local. Claude Code reads CLAUDE.md, not
+# AGENTS.md, so both symlinks must exist and both must be ignored.
 /AGENTS.md
+/CLAUDE.md
+.claude/
 fastq/
 output/
 output_v1_4_bamtest/
 ParseBiosciences-Pipeline.1.6.4/
 scripts/__pycache__/
 tmp/
+archive/*
+!archive/audit_workflows/
+archive/audit_workflows/*
+!archive/audit_workflows/2026_pilot/
+!archive/audit_workflows/2026_pilot/**

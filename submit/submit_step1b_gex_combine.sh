@@ -15,6 +15,9 @@
 #$ -binding linear:4
 
 set -euo pipefail
+# Explicit tools use NSLOTS; nested numerical pools use one thread.
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
+export PYTHONDONTWRITEBYTECODE=1
 
 # --- Configuration ---
 if [[ -n "${CSM_CONFIG:-}" ]]; then
@@ -91,7 +94,16 @@ done
 # generated from a different guide reference.
 python3 "${SCRIPTS_DIR}/validate_gex_filter_manifests.py" --config "${CONFIG}"
 
+GEX_ALIGNMENT_BACKEND=$(python3 "${SCRIPTS_DIR}/gex_alignment.py" --config "${CONFIG}")
+if [[ "${GEX_ALIGNMENT_BACKEND}" == "kallisto" ]]; then
+    export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+    python3 "${SCRIPTS_DIR}/combine_kallisto_gex.py" --config "${CONFIG}"
+    echo "Step 1b kallisto complete: $(date)"
+    exit 0
+fi
+
 # Execute the custom python wrapper that patches split-pipe's list-index bug at runtime
+python3 "${SCRIPTS_DIR}/gex_alignment.py" --config "${CONFIG}" --validate-star-policies
 python3 "${SCRIPTS_DIR}/splitpipe_wrapper.py" \
     --wrapper_config "${CONFIG}" \
     --wrapper_splitpipe_dir "${SPLITPIPE_DIR}" \
@@ -100,6 +112,7 @@ python3 "${SCRIPTS_DIR}/splitpipe_wrapper.py" \
     --output_dir "${COMB_OUT}" \
     --nthreads "${NSLOTS:-4}" \
     --save_anndata
+python3 "${SCRIPTS_DIR}/gex_alignment.py" --config "${CONFIG}" --write-star-combined-policy
 
 echo ""
 echo "Step 1b complete: $(date)"

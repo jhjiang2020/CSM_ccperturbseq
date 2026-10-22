@@ -15,6 +15,8 @@
 #$ -binding linear:8
 
 set -euo pipefail
+# Explicit tools use NSLOTS; nested numerical pools use one thread.
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 
 # --- Configuration (must be passed as absolute path via -v CSM_QC_CONFIG=...) ---
 if [[ -z "${CSM_QC_CONFIG:-}" ]]; then

@@ -1,0 +1,12 @@
+# Optional reference-building/alignment tools. Pipeline Python remains splitpipe.
+name: csm_kallisto
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  - kallisto=0.52.0
+  - bustools=0.45.1
+  - pip
+  - pip:
+      - kb-python==0.29.5

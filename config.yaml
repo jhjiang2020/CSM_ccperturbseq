@@ -82,6 +82,11 @@ design:
   # so they must be rev-comp'd to match.
   rev_comp_ibar: true
 
+# --- GEX alignment backend (existing configurations default to STAR) ---
+gex_alignment:
+  backend: "star"  # Optional kallisto settings: docs/KALLISTO_BACKEND.md
+  # umi_correction: "parse"  # parse (default), directional, none; applies to STAR and kallisto
+
 # --- Parse Biosciences split-pipe settings ---
 splitpipe:
   # Kit name. Options: WT, WT_mega, WT_mini

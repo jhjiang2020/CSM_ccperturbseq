@@ -17,16 +17,29 @@ analysis_name: "CSM_ccperturbseq"
 environment:
   # Path to conda installation (parent of condabin/)
   # Run `conda info --base` in your terminal to find this path if unsure.
-  conda_prefix: "/home/unix/jjiahao/my-conda/"
-  # Conda environment name to activate for pipeline scripts
-  conda_env: "splitpipe"
+  conda_prefix: "/medpop/rgupta/Jiahao/conda/envs/splitpipe-share"
+  # Conda environment name or absolute prefix to activate for pipeline scripts
+  conda_env: "/medpop/rgupta/Jiahao/conda/envs/splitpipe-share"
 
-# --- Broad UGER resources ---
+# --- Optional UGER resources (omit this entire section for legacy defaults) ---
+# Memory is PER SLOT; total reserved GB = slots * memory_per_slot_gb.
+# Every stage, reference build and QC profile is documented in docs/UGER_RESOURCES.md.
 uger:
-  step1a:
-    slots: 16
-    memory_per_slot_gb: 8
-    runtime_hours: 48
+  queue: broad
+  parallel_environment: smp
+  binding: linear
+  # os: RedHat8          # Optional site constraint; omitted for legacy pipeline jobs.
+  # project: lab_account # Optional UGER accounting project (-P).
+  # defaults:
+  #   max_concurrent: 2  # Array tasks at once, independent for each stage.
+  step1a: {slots: 16, memory_per_slot_gb: 8, runtime_hours: 48}
+  step1b: {slots: 4, memory_per_slot_gb: 16, runtime_hours: 4}
+  step1c: {slots: 1, memory_per_slot_gb: 4, runtime_hours: 12}
+  step1c_aggregate: {slots: 4, memory_per_slot_gb: 32, runtime_hours: 8}
+  step2: {slots: 1, memory_per_slot_gb: 4, runtime_hours: 12}
+  step3: {slots: 8, memory_per_slot_gb: 4, runtime_hours: 12}
+  step4: {slots: 4, memory_per_slot_gb: 32, runtime_hours: 4}
+  step5: {slots: 1, memory_per_slot_gb: 32, runtime_hours: 4}
 
 # --- Paths ---
 paths:
@@ -81,6 +94,11 @@ design:
   # sequencing read strand. The pipeline reads iBARs from R1 (read strand),
   # so they must be rev-comp'd to match.
   rev_comp_ibar: true
+
+# --- GEX alignment backend (existing configurations default to STAR) ---
+gex_alignment:
+  backend: "star"  # Optional kallisto settings: docs/KALLISTO_BACKEND.md
+  # umi_correction: "parse"  # parse (default), directional, none; applies to STAR and kallisto
 
 # --- Parse Biosciences split-pipe settings ---
 splitpipe:

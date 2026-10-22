@@ -1,5 +1,10 @@
 # Q2: Guide Recombination Rate Estimation — Model Design (v4)
 
+This is model specification **v4**, independent of the pipeline release number
+**v2.0**. It consumes guide-assignment categories; it does not select a GEX
+aligner or UMI flavor. See the [QC overview](QC_overview.md) and
+[current configuration guide](docs/CONFIGURATION.md) for execution and inputs.
+
 ## Background
 
 Each cell receives lentiviral constructs with `[pos1_grna–ibar1]–[pos2_grna–ibar2]`. After blasticidin selection (**all uninfected cells killed**), per-cell readout detects gRNAs and iBARs. Q2 estimates the guide recombination rate by modeling all stochastic processes that produce unexpected combinations.
@@ -266,34 +271,33 @@ Maximize log-likelihood with `scipy.optimize.minimize`, initialized from heurist
 
 ---
 
-## Proposed Code Changes
+## Current implementation entry points
 
-### [MODIFY] [qc_q1_guide_efficacy.py](file:///Volumes/Jiahao/TIMI/CSM_ccperturbseq/scripts/qc_q1_guide_efficacy.py)
+The equations above are a model-design specification. For executable behavior,
+use [qc_q2_recombination.py](scripts/qc_q2_recombination.py) through
+[qc_analysis.ipynb](scripts/qc_analysis.ipynb), following the
+[QC overview](QC_overview.md). The module contains legacy four-category routines
+and expanded category routines such as `observable_probs_v2`, `fit_mle_v2` and
+`doublet_convolution_v2`; `run_mle_analysis` selects the configured model path.
+Consult those signatures rather than treating the pseudocode here as a CLI.
 
-- Add `count_model_categories(adata, ref_df)` → returns `{n₁, n₂, n₃, n₄}` per sample
+The current Q2 module covers background/noise estimation, recombination MLE,
+and a guide-UMI threshold sweep. Q1 is the separate bulk-library workflow in
+[qc_q1_guideseq.py](scripts/qc_q1_guideseq.py). Knockdown validation belongs to
+Q3, [qc_q3_kd_efficacy.py](scripts/qc_q3_kd_efficacy.py), and Q4 covers fitness.
+Earlier proposed filenames `qc_q1_guide_efficacy.py` and `qc_q2_decoupling.py`
+are obsolete and should not be copied into a new workflow.
 
-### [MODIFY] [qc_q2_decoupling.py](file:///Volumes/Jiahao/TIMI/CSM_ccperturbseq/scripts/qc_q2_decoupling.py)
+Q2 consumes guide-assignment categories and its model parameters, not GEX BUS
+files. Changing `gex_alignment.umi_correction` does not change the guide UMI
+policy. A transcript-primary or fractional expression product may require
+adapting gene-expression QC consumers, independently of this category model.
 
-- **Remove** Part C (KD comparison — now in Q1)
-- **Keep** Part A (pairing stats), Part B (fitness)
-- **Add** Part C — Recombination Model:
-  - `per_construct_probs(d, s, r_swap, r12, r_del)` → `(P_C, P_I, P_M, P_X)`
-  - `cell_probs_single(P_C, P_I, P_M, P_X, moi, k_max=3)` → 4-vector
-  - `doublet_convolution(p_single)` → 4-vector
-  - `observable_probs(θ, moi, δ)` → `[P(n₁), ..., P(n₄)]`
-  - `neg_log_likelihood(θ, counts, moi, δ)` → scalar
-  - `estimate_stepwise(counts, moi, δ)` → initial `(d, s, r)`
-  - `fit_mle(counts, moi, δ, extended=False)` → `θ̂ ± CI`
-  - `simulate_cells(θ, moi, δ, N)` → synthetic counts (for validation)
-  - `plot_observed_vs_expected(...)`, `plot_sensitivity(...)`
+## Intended model diagnostics
 
-### Outputs
-1. Parameter table CSV: `d, s, r_swap, r₁₂, r_del` (± CI) per sample
-2. Observed vs expected bar chart
-3. Sensitivity plot: `r` vs assumed MOI/δ
-4. Simulation validation: recovery of known parameters
-
----
+The checks below describe model validation, not an assertion that a particular
+experiment has passed them. Retain the fitted model choice, category definitions,
+MOI/doublet assumptions, source data and diagnostic outputs with every report.
 
 ## Verification
 

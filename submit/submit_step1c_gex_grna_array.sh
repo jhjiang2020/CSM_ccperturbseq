@@ -12,6 +12,7 @@
 # Array range, dependency on Step 1a, and log path are supplied by qsub.
 
 set -euo pipefail
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 
 if [[ -n "${CSM_CONFIG:-}" ]]; then
     CONFIG="${CSM_CONFIG}"

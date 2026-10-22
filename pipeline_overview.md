@@ -1,80 +1,100 @@
-# Pipeline architecture and data flow
+# v2.0 architecture and data flow
 
-For installation, configuration, UGER submission, monitoring, output paths,
-and v1.4 migration, start with the [README](README.md). This page describes
-the processing architecture only.
+Start with the [quick start](docs/QUICKSTART.md) for setup. The
+[configuration reference](docs/CONFIGURATION.md) and [execution runbook](docs/RUNNING.md)
+cover both self-contained installations and the optional shared Broad setup.
+Parse split-pipe 1.6.4 remains required; its source distribution is obtained
+separately and kept pristine.
 
-The repository expects a Parse Biosciences-provided split-pipe 1.6.4 source
-tree at `paths.splitpipe_dir`; it does not provide that vendor distribution.
-The supplied submission wrappers are designed for the Broad Institute's UGER
-cluster. An example project layout, including a locally obtained Parse copy, is
-available at `/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq` for Broad users with
-access. Other schedulers require an adapted submission layer.
-
-## Production data flow
-
-```mermaid
-flowchart LR
-    D[Design CSV] --> S0[Step 0: reference]
-    GEX[GEX FASTQ] --> S1A[Step 1a: preprocess + STAR + mol]
-    S1A --> S1B[Step 1b: combine GEX]
-    GRNA[Dedicated gRNA FASTQ] --> S2[Step 2: Parse barcodes]
-    S0 --> S3[Step 3: guide/iBAR match]
-    S2 --> S3
-    S3 --> S4[Step 4: UMI collapse + assignment]
-    S1B --> S5[Step 5: AnnData integration]
-    S4 --> S5
-```
-
-Array dimensions come from `libraries`, so the same wrappers handle one,
-four, twelve, or more sublibraries. FASTQ resolution supports multiple lanes,
-token-bounded prefixes, and explicit pairs.
-
-## v1.4 pre-STAR branch
-
-Universal reverse transcription uses poly(A) probes for long cDNA and gRNA
-probes for short guide products. The two products are separated by size before
-library construction. A small amount of short gRNA material can remain in the
-GEX fraction; it can be problematic when STAR assigns it to a transcript whose
-true expression is similarly low.
+## Production stages
 
 ```mermaid
 flowchart TD
-    R[Raw GEX R1/R2] --> BC[Normal split-pipe barcode correction]
-    BC --> F{TSO + reference guide?}
-    F -->|no| TRIM[Normal/fuzzy-aware TSO trim]
-    TRIM --> STAR[Human STAR]
-    F -->|yes| REJ[Paired rejected FASTQs]
-    F -->|valid barcode| EV[Compact corrected barcode evidence]
-    EV -->|optional| S1C[Step 1c: ordinary Step 3 on evidence only]
-    S1C --> STRICT[Conservative guide/iBAR subset]
-    STRICT --> MERGE[Dedicated + GEX reads]
-    MERGE --> COLLAPSE[Depth filter + directional Hamming-1 UMI collapse]
+    DESIGN[Guide design] --> S0[Step 0: format guide reference]
+    GEX[GEX FASTQs] --> PRE[Step 1a: Parse preprocessing and barcode correction]
+    PRE --> FILTER{Optional TSO + guide filter}
+    FILTER -->|survivors| BACKEND{GEX backend}
+    BACKEND -->|default| STAR[STAR + Parse molecule/DGE path]
+    BACKEND -->|optional| KAL[kallisto BUS + native UMI counting]
+    STAR --> COMB[Step 1b: backend-specific GEX combine]
+    KAL --> COMB
+    FILTER -. corrected guide evidence .-> S1C[Optional Step 1c: match + strict subset]
+    GRNA[Dedicated guide FASTQs] --> S2[Step 2: Parse barcode decoding]
+    PRE --> S2
+    S2 --> S3[Step 3: guide/iBAR matching]
+    S0 --> S3
+    S0 --> FILTER
+    S3 --> S4[Step 4: guide UMI collapse and assignment]
+    S1C -. optional source union .-> S4
+    COMB --> S5[Step 5: integrated AnnData]
+    S4 --> S5
 ```
 
-The filter is installed as a checksum-validated in-memory overlay; the vendor
-Parse 1.6.4 source remains unchanged. Step 1c never rescans the full GEX FASTQ
-and never performs rejected-only barcode calibration. Dedicated-only, GEX-only,
-and combined guide products remain distinct and auditable.
+Step 0 and expression-reference construction are preparation tasks. The Broad
+master submits Steps 1–5; its Step 2 dependency waits for Step 1a when both are
+requested. After Step 1a, Step 1b and the guide branch can progress independently
+until integration. Array indices follow the configured `libraries` list.
+The same workers can be invoked inside another scheduler's allocation with
+explicit task and CPU environment variables.
 
-## QC architecture
+## GEX backend boundary
 
-The GEX carry-over QC is a separate workflow. It measures raw prevalence and
-barcode/UMI families, benchmarks the production decision at 54 nt, writes
-synchronized artifacts, runs controlled full/short54 alignments against the
-same genome with the same STAR parameters, audits the historical BAM, and can
-quantify both expression burden and guide-matrix changes.
+Parse owns kit/chemistry definitions, preprocessing, barcode correction,
+RT/barcode-index identity, sample masks and the cell-calling algorithm. Kallisto
+changes the transcriptomic alignment and molecule quantification within Step 1a.
+It uses a transcript/target reference, not a BAM projection into Parse gene
+counting. `paths.genome_dir` still supplies Parse annotation and initialization.
 
-In the completed C2 controlled experiment, none of 10,559 full-length
-contaminants mapped, while 8,113 mapped after 54-nt truncation and 4,008 became
-false gene-assigned reads. Of these, 2,431 were assigned to the guide's intended
-target, and all target-concordant events were captured by the production
-filter. The historical annotated BAM is only a supplementary cross-check
-because the default split-pipe STAR output omits unmapped reads.
+`gex_alignment.umi_correction` selects `parse` (default), `directional`, or
+`none` on either backend. Native counting holds complete corrected-barcode
+groups within workers and aggregates physical wells after UMI collapse.
+Parallel shards merge in original barcode order to preserve fractional sums.
+STAR's alternative correction modes use an in-memory function override; vendor
+source files are unchanged.
 
-The random N7 found before the TSO in the dedicated gRNA library is introduced
-by circularization-capture amplification. It is not expected on gRNA molecules
-that escaped size selection into GEX, so the GEX filter does not require N7.
+Kallisto defaults to unique gene assignment and gene-level sparse output.
+Fractional genes and additional/primary transcript-target output are explicit
+choices. Step 1b dispatches to the matching combine implementation, preserving
+feature order and fractional counts. Step 5 validates expression provenance and
+aligns dedicated/combined guide products to the called cells.
+[Full semantics and limits](docs/KALLISTO_BACKEND.md).
 
-See [docs/GEX_GRNA_CONTAMINATION_QC.md](docs/GEX_GRNA_CONTAMINATION_QC.md)
-for the step-by-step QC contract and C2 results.
+## GEX gRNA carry-over and optional guide recovery
+
+Universal reverse transcription produces long poly(A)-primed cDNA and short
+gRNA-probe products together. Size selection separates the GEX and dedicated
+gRNA fractions, but a small amount of guide material can remain in GEX. The
+filter introduced in v1.4 removes a read only with a full/fuzzy TSO near the GEX
+R1 start and a complete reference-supported guide. TSO alone is insufficient.
+Survivors receive the configured full-TSO/fallback trim before either backend.
+
+The filter also writes compact, valid corrected-barcode evidence. Optional
+Step 1c matches those rows and applies stricter guide/iBAR acceptance before
+Step 4 source union. It never rescans all GEX FASTQs or recalibrates barcodes
+from rejected reads. Removal does not imply identity can be recovered: short
+GEX reads may contain the full guide but not the dual-guide iBAR.
+
+Dedicated-only, GEX-only and combined guide products remain distinguishable.
+Source union occurs before Step 4 read-depth filtering and its existing gRNA
+UMI collapse. That guide correction policy is independent of GEX transcriptomic
+`umi_correction`. The circularization-capture N7 prefix belongs to the dedicated
+gRNA fraction; it is not required on GEX carry-over.
+[Operating guide](docs/GEX_DECONTAMINATION_V1_4.md).
+
+## Validation and downstream boundary
+
+Kallisto reference and completion manifests protect annotation/settings and
+output identity; STAR policy markers prevent mixing new GEX UMI modes. GEX
+filter and Step 1c evidence have separate provenance contracts. A new output
+namespace is used for backend/reference/policy comparisons.
+
+Separate carry-over QC uses raw scans, controlled full/short54 **STAR** arms and
+historical BAM audits. Those experiments retain their original backend scope;
+they are not required intermediates of a kallisto production run.
+[QC documentation](docs/README.md#qc-guides).
+
+This repository owns FASTQ-to-AnnData processing and count validation.
+`analysis/` is a separate Git submodule for downstream inference and is not
+required to execute Steps 0–5. Published historical reports remain evidence
+with their original definitions; the [documentation index](docs/README.md)
+separates them from current operating instructions.

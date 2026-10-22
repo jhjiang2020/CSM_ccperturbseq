@@ -1,0 +1,13 @@
+{
+  "all_libraries_measured_at_matched_depth": true,
+  "contiguity_control_passed": true,
+  "libraries": 12,
+  "matched_depth_read_pairs": 500000,
+  "platforms": [
+    "MiSeq",
+    "NovaSeq"
+  ],
+  "report_path": "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/docs/GEX_UMI_SATURATION_REPORT.md",
+  "schema_version": 1,
+  "validated": true
+}

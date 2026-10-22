@@ -1,5 +1,64 @@
 # Release Notes
 
+## v2.0 — Native kallisto and tunable GEX UMI correction (2026-10-22)
+
+All maintained UGER stages now share optional YAML resources: CPU slots, memory
+per slot, wall time, array concurrency, queue/OS/PE/account and site complexes.
+Old configs retain their previous requests. Exact submitted IDs/resources are
+recorded, and main-workflow holds use those IDs. See
+[UGER resources](docs/UGER_RESOURCES.md).
+
+The transcriptomic backend is selectable in Step 1a while Parse split-pipe
+1.6.4 remains a dependency for preprocessing, barcode/sample handling and cell
+calling. STAR remains the default. The Parse installation is unchanged.
+
+- Added native kallisto BUS counting with Parse-compatible UMI families,
+  sparse per-library products and a matching Step 1b combine path. Counts feed
+  the existing guide/AnnData workflow without a pseudo-BAM projection.
+- Added `gex_alignment.umi_correction: parse|directional|none` to **both STAR
+  and kallisto**. Parse remains the default; directional uses the fixed-count
+  `n_high >= 2*n_low - 1` rule and bustools-compatible traversal. Exact duplicate
+  grouping remains when neighbor correction is disabled. Step 4 gRNA UMI
+  correction remains independent.
+- Gene output and unique gene assignment are default. Optional fractional
+  gene assignment preserves noninteger values; `output_level: both` adds target
+  matrices, and `transcript` selects targets as the primary expression level.
+- Parallelized native counting by complete corrected-barcode shards, cached
+  EC/gene annotation and ordered disk-backed merging. `count_threads: 0` uses
+  allocated cores; a positive cap, including serial `1`, is supported. Workers
+  read an immutable spool and merge into a separate database.
+- Added reference/settings/output completion checks and STAR UMI policy markers
+  to prevent mixed or stale quantification at combination/integration.
+- GEX decontamination and optional Step 1c remain available with either backend;
+  historical BAM reuse and coordinate-specific QC remain STAR-only.
+
+The [quick start](docs/QUICKSTART.md), [installation](docs/INSTALLATION.md),
+[configuration reference](docs/CONFIGURATION.md), [execution runbook](docs/RUNNING.md)
+and [migration guide](docs/MIGRATING_TO_V2.md) cover colleagues with and without
+shared rgupta access. Earlier operating guides now describe the backend boundary
+and current worker entry points. Historical reports retain their measured
+methods/results and point to the current guides.
+
+The optional lab tools companion uses the stable public name
+`/medpop/rgupta/Jiahao/conda/envs/csm_kallisto-share`, pointing to the validated
+`csm_kallisto-share_20261022` build, with 60 checks
+passed against the unchanged `splitpipe-share` environment. See
+[shared installation](docs/INSTALLATION.md#shared-kallisto-companion-published-2026-10-22)
+for the pinned versions and completion manifest. The targeted UGER regression
+suite for resources, report templates and backend fixtures passed 144 tests and
+49 subtests; shell/YAML examples and local documentation links were checked.
+
+The [original four-library benchmark](docs/KALLISTO_PILOT_BENCHMARK_REPORT.md)
+is the serial-counter baseline. The completed
+[optimized benchmark](docs/KALLISTO_PARALLEL_BENCHMARK_REPORT.md) repeats all
+36 backend/UMI-mode cases at 10 million pairs per library with 16 cores.
+Kallisto counting takes 42–47 seconds per library, and preprocessing through
+DGE output takes 6.59–7.16 minutes versus 8.37–8.70 minutes for STAR (medians
+across four libraries; shared preprocessing is reused). All 96 tested count
+products match their serial reference exactly. See
+[the backend guide](docs/KALLISTO_BACKEND.md) for validation and output semantics.
+
+
 This file records user-visible behavior changes. New users should begin with
 the [README quick start](README.md); architecture is summarized in
 [pipeline_overview.md](pipeline_overview.md), and implementation details are in

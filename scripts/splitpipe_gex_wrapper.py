@@ -180,9 +180,10 @@ def validate_splitpipe_tree(splitpipe_dir: Path) -> None:
 
 
 class _OverlayLoader(importlib.abc.Loader):
-    def __init__(self, source_path: Path, hunks: tuple[Hunk, ...]):
+    def __init__(self, source_path: Path, hunks: tuple[Hunk, ...], umi_correction="parse"):
         self.source_path = source_path
         self.hunks = hunks
+        self.umi_correction = umi_correction
 
     def create_module(self, spec):  # noqa: ANN001
         return None
@@ -192,29 +193,44 @@ class _OverlayLoader(importlib.abc.Loader):
         overlaid = apply_hunks(original, self.hunks, str(self.source_path))
         module.__file__ = str(self.source_path)
         exec(compile(overlaid, str(self.source_path), "exec"), module.__dict__)
+        if module.__name__ == "splitpipe.molinfo" and self.umi_correction != "parse":
+            try:
+                from scripts.kallisto_umi import collapse_umis
+            except ModuleNotFoundError:
+                from kallisto_umi import collapse_umis
+            flavor = self.umi_correction
+
+            def correction_kernel(umis, counts):
+                families = collapse_umis(dict(zip(umis, map(int, counts))), flavor=flavor)
+                return {umi: reads for umi, reads, _ in families}
+
+            module.collapse_polyN = correction_kernel
 
 
 class SplitpipeOverlayFinder(importlib.abc.MetaPathFinder):
     """Intercept only the Parse modules named in ``MODULE_TO_SOURCE``."""
 
-    def __init__(self, splitpipe_dir: Path, patch_sections: dict[str, tuple[Hunk, ...]]):
+    def __init__(self, splitpipe_dir: Path, patch_sections: dict[str, tuple[Hunk, ...]], umi_correction="parse"):
         self.splitpipe_dir = splitpipe_dir
         self.patch_sections = patch_sections
+        self.umi_correction = umi_correction
 
     def find_spec(self, fullname, path=None, target=None):  # noqa: ANN001
         relative_path = MODULE_TO_SOURCE.get(fullname)
         if relative_path is None:
             return None
         source_path = self.splitpipe_dir / relative_path
-        loader = _OverlayLoader(source_path, self.patch_sections[relative_path])
+        loader = _OverlayLoader(source_path, self.patch_sections[relative_path], self.umi_correction)
         return importlib.util.spec_from_loader(
             fullname, loader, origin=str(source_path)
         )
 
 
-def install_runtime_overlay(splitpipe_dir: Path, patch_file: Path) -> None:
+def install_runtime_overlay(splitpipe_dir: Path, patch_file: Path, umi_correction="parse") -> None:
     """Validate and install the import-time overlay without touching disk sources."""
     validate_splitpipe_tree(splitpipe_dir)
+    if umi_correction not in ("parse", "directional", "none"):
+        raise OverlayError("UMI correction must be parse, directional, or none")
     if not patch_file.is_file():
         raise OverlayError(f"runtime overlay patch not found: {patch_file}")
     sections = parse_unified_diff(patch_file.read_text(encoding="utf-8"))
@@ -232,21 +248,22 @@ def install_runtime_overlay(splitpipe_dir: Path, patch_file: Path) -> None:
         )
         compile(overlaid, str(source_path), "exec")
 
-    if os.environ.get("CSM_GEX_DECONTAM_HOOK"):
+    if os.environ.get("CSM_GEX_DECONTAM_HOOK") or umi_correction != "parse":
         start_method = multiprocessing.get_start_method()
         if start_method != "fork":
             raise OverlayError(
-                "the inline preprocessing overlay requires multiprocessing start "
+                "the in-memory GEX overlays require multiprocessing start "
                 f"method 'fork', observed {start_method!r}; UGER/Linux uses 'fork'"
             )
 
-    sys.meta_path.insert(0, SplitpipeOverlayFinder(splitpipe_dir, sections))
+    sys.meta_path.insert(0, SplitpipeOverlayFinder(splitpipe_dir, sections, umi_correction))
 
 
 def _parse_wrapper_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--wrapper_splitpipe_dir", required=True)
     parser.add_argument("--wrapper_patch", required=True)
+    parser.add_argument("--wrapper_umi_correction", choices=("parse", "directional", "none"), default="parse")
     return parser.parse_known_args(argv)
 
 
@@ -258,14 +275,17 @@ def main(argv: list[str] | None = None) -> int:
     patch_file = Path(wrapper_args.wrapper_patch).resolve()
 
     sys.path.insert(0, str(splitpipe_dir))
-    install_runtime_overlay(splitpipe_dir, patch_file)
+    sys.dont_write_bytecode = True
+    install_runtime_overlay(splitpipe_dir, patch_file, wrapper_args.wrapper_umi_correction)
     splitpipe_bin = splitpipe_dir / "split-pipe"
     sys.argv = [str(splitpipe_bin), *splitpipe_args]
     print(
-        "CSM v1.4: applying GEX decontamination as an in-memory Parse 1.6.4 "
-        "module overlay (vendor files unchanged)",
+        "CSM: applying GEX overlays in memory to Parse 1.6.4 "
+        "(vendor files unchanged)",
         flush=True,
     )
+    if wrapper_args.wrapper_umi_correction != "parse":
+        print(f"GEX UMI correction: {wrapper_args.wrapper_umi_correction} (in-memory kernel)", flush=True)
     try:
         runpy.run_path(str(splitpipe_bin), run_name="__main__")
     except SystemExit as exc:

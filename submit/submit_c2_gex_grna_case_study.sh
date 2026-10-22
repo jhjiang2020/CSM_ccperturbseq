@@ -9,6 +9,8 @@
 #$ -binding linear:4
 
 set -euo pipefail
+# Explicit tools use NSLOTS; nested numerical pools use one thread.
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 
 SUBMIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${CSM_PROJECT_DIR:-$(dirname "${SUBMIT_DIR}")}"

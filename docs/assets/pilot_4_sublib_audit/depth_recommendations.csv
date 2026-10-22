@@ -1,0 +1,5 @@
+sublibrary,recommended_gex_fraction,recommended_grna_fraction,target_gex_median_umi,target_grna_assignment_support_median_umi,recommended_gex_read_pairs_per_loaded_cell,recommended_grna_read_pairs_per_loaded_cell
+C1,0.9,0.3,6822.900000000001,42.300000000000004,25041.977224615384,256.47784615384614
+C2,0.9,0.4,5299.650000000001,36.45,20140.43139692308,800.2676184615385
+T1,0.9,0.2,4880.25,37.800000000000004,21145.537008000003,266.679392
+T2,0.9,0.3,3872.7000000000003,24.3,20376.990912,325.01448

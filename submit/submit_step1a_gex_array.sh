@@ -16,6 +16,8 @@
 # NOTE: -t (array range) and -o (log dir) are set dynamically by submit_pipeline.sh
 
 set -euo pipefail
+# Explicit tools use NSLOTS; nested numerical pools use one thread.
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 
 # --- Configuration ---
 # CSM_CONFIG is passed via qsub -v from submit_pipeline.sh.
@@ -96,6 +98,9 @@ SPLITPIPE="${SPLITPIPE_DIR}/split-pipe"
 SPLITPIPE_GEX_WRAPPER="${SCRIPTS_DIR}/splitpipe_gex_wrapper.py"
 SPLITPIPE_GEX_PATCH="${PROJECT_DIR}/patches/parsebio_splitpipe_1.6.4_gex_decontamination.patch"
 OUT_SUBLIB="${OUTPUT_DIR}/gex_${LIB_NAME}"
+GEX_ALIGNMENT_BACKEND=$(python3 "${SCRIPTS_DIR}/gex_alignment.py" \
+    --config "${CONFIG}" --library "${LIB_NAME}" --check-output)
+GEX_UMI_CORRECTION=$(python3 -c "import yaml; cfg=yaml.safe_load(open('${CONFIG}')); print((cfg.get('gex_alignment') or {}).get('umi_correction', 'parse'))")
 
 if [[ "${EXISTING_ALIGNMENT_ENABLED}" == "True" ]]; then
     SOURCE_SUBLIB=$(python3 -c "import yaml; cfg=yaml.safe_load(open('${CONFIG}')); section=cfg['gex_decontamination']['existing_alignment']; print(section.get('source_output_dir_template', '{output_dir}/gex_{library}').format(output_dir=cfg['paths']['output_dir'], library='${LIB_NAME}'))")
@@ -128,10 +133,11 @@ else
 fi
 
 run_splitpipe() {
-    if [[ "${GEX_DECONTAM_ENABLED}" == "True" ]]; then
+    if [[ "${GEX_DECONTAM_ENABLED}" == "True" || "${GEX_UMI_CORRECTION}" != "parse" ]]; then
         python3 "${SPLITPIPE_GEX_WRAPPER}" \
             --wrapper_splitpipe_dir "${SPLITPIPE_DIR}" \
             --wrapper_patch "${SPLITPIPE_GEX_PATCH}" \
+            --wrapper_umi_correction "${GEX_UMI_CORRECTION}" \
             "$@"
     else
         "${SPLITPIPE}" "$@"
@@ -180,6 +186,27 @@ if [[ "${GEX_DECONTAM_ENABLED}" == "True" ]]; then
     for path in "${FQ2_FILES[@]}"; do identity_args+=(--r2 "${path}"); done
     python3 "${SCRIPTS_DIR}/write_fastq_input_identity.py" "${identity_args[@]}"
     export CSM_GEX_DECONTAM_INPUT_MANIFEST="${INPUT_IDENTITY}"
+fi
+
+if [[ "${GEX_ALIGNMENT_BACKEND}" == "kallisto" ]]; then
+    # Retain Parse preprocessing; native BUS counting supplies the DGE contract.
+    export PYTHONDONTWRITEBYTECODE=1
+    export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+    run_splitpipe \
+        --mode pre --one_step \
+        --kit "${KIT}" \
+        --chemistry "${CHEMISTRY}" \
+        --genome_dir "${GENOME_DIR}" \
+        --fq1 "${FQ1_FILES[@]}" \
+        --fq2 "${FQ2_FILES[@]}" \
+        --output_dir "${OUT_SUBLIB}" \
+        --sample "${SAMPLE_NAME}" "${SAMPLE_WELLS}" \
+        --nthreads "${NSLOTS:-16}" \
+        ${EXTRA_FLAGS}
+    python3 "${SCRIPTS_DIR}/run_kallisto_gex.py" \
+        --config "${CONFIG}" --library "${LIB_NAME}" --threads "${NSLOTS:-16}"
+    echo "Step 1a kallisto complete for ${LIB_NAME}: $(date)"
+    exit 0
 fi
 
 if [[ "${EXISTING_ALIGNMENT_ENABLED}" == "True" ]]; then
@@ -268,6 +295,8 @@ else
             --library "${LIB_NAME}"
     fi
 fi
+
+python3 "${SCRIPTS_DIR}/gex_alignment.py" --config "${CONFIG}" --write-star-policy "${OUT_SUBLIB}"
 
 echo ""
 echo "Step 1a complete for ${LIB_NAME}: $(date)"

@@ -16,6 +16,8 @@
 # NOTE: -t (array range) and -o (log dir) are set dynamically by submit_pipeline.sh
 
 set -euo pipefail
+# Explicit tools use NSLOTS; nested numerical pools use one thread.
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 export PYTHONDONTWRITEBYTECODE=1
 
 # --- Configuration ---

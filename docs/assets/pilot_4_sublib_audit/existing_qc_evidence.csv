@@ -1,0 +1,9 @@
+evidence,value,unit
+Q1 construct intact rate,0.7492418171620302,fraction
+Q1 position-1 deletion rate,0.0219696629072815,fraction
+Q1 position-2 deletion rate,0.02338658822156875,fraction
+Q2 threshold-5 iBAR-decoupled evidence,0.008382495706071242,fraction
+Q2 threshold-5 cells with decoupling evidence,0.0137652085983625,fraction
+Q2 fitted dropout parameter d,0.1094592142393622,fraction
+Q2 fitted silencing parameter s,0.1571314406150232,fraction
+Q2 fitted recombination parameter r,0.165318791452914,fraction

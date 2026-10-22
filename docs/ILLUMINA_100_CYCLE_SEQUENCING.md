@@ -1,4 +1,13 @@
-# Illumina sequencing-cycle recommendations
+# Illumina sequencing-cycle scenarios — v2.0
+
+[Quick start](QUICKSTART.md) · [Configuration](CONFIGURATION.md) ·
+[GEX decontamination](GEX_DECONTAMINATION_V1_4.md)
+
+The read-reach constraints apply to STAR and kallisto because Parse preprocessing
+and the sequenced construct are shared. Selecting kallisto does not recover
+unsequenced iBARs or reduce the chemistry-v3 R2 requirement. The 138-cycle
+service budget below is the specific sequencing scenario evaluated here, not a
+universal specification for every kit.
 
 This note compares the 300-cycle baseline with two shorter-run strategies for
 CSM ccPerturb-seq. The central constraint is simple: GEX can be shortened while
@@ -82,7 +91,7 @@ that were not sequenced.
 ## Baseline: GEX 300-cycle and gRNA 300-cycle
 
 The pilot baseline used long paired reads for both arms. Long GEX R1 maximizes
-cDNA sequence available to STAR and can expose guide, stem, and iBAR on the rare
+cDNA sequence available to the selected transcriptomic aligner and can expose guide, stem, and iBAR on the rare
 GEX contaminants. Long dedicated-gRNA R1 supports guide, stem/position, iBAR,
 and downstream-anchor validation.
 

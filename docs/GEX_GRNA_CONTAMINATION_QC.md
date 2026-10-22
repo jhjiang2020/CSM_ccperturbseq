@@ -1,10 +1,35 @@
-# GEX gRNA Cross-Contamination QC
+# GEX gRNA cross-contamination QC — v2.0 usage
 
-This v1.4 QC module measures gRNA-construct carry-over in GEX libraries,
+Resource requests for every maintained stage are optional YAML settings; see
+[UGER resources](UGER_RESOURCES.md) for CPU/RAM/time defaults, array limits,
+site configuration and examples of increasing resources.
+
+This QC module, introduced in v1.4, measures gRNA-construct carry-over in GEX libraries,
 benchmarks removal rules for a 54-nt R1, and quantifies whether contaminant
 reads can become false gene-expression alignments or molecules. It is an audit
 workflow, not the production Step 1 decontamination path: it reads the original
 FASTQs and existing split-pipe BAMs without modifying them.
+
+## v2.0 scope and current entry points
+
+Use the [quick start](QUICKSTART.md) and [installation guide](INSTALLATION.md)
+for your own software/reference paths; a shared rgupta environment is optional.
+This audit uses production `splitpipe`, not the Q1–Q4 notebook environment.
+The maintained launcher is
+`submit/submit_qc_gex_grna_contamination_pipeline.sh`; production removal is
+configured separately with `gex_decontamination` in the Steps 1–5 config.
+
+Raw structural scans and corrected-barcode evidence remain relevant with either
+GEX backend. Controlled full/short54 alignment arms and historical annotated-BAM
+audits are **STAR experiments**. A native kallisto production run does not
+provide a genomic BAM; do not point those audit arms at its BUS/target products
+or interpret their old STAR alignment percentages as kallisto estimates.
+The measured C1/C2 values below retain their original input/policy scope.
+
+`gex_alignment.umi_correction` controls production GEX transcriptomic counting.
+It does not retroactively change a historical audit's molecule proxy/collapse
+definition or the Step 4 gRNA correction policy. Report those definitions when
+comparing results. [Current execution/dependency guide](RUNNING.md).
 
 ## Rationale
 

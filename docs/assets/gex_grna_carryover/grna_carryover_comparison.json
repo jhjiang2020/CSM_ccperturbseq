@@ -1,0 +1,29 @@
+{
+  "expected_per_library": 31.811201250000003,
+  "expected_pilot": 228.0,
+  "expected_revised": 254.48961000000003,
+  "informative_rate_ratio": 0.6333324264962964,
+  "informative_rate_ratio_ci95": [
+    0.528371927390824,
+    0.7591432126843397
+  ],
+  "minimum_detectable_ratio": 1.291072427469246,
+  "pilot_contaminants": 228,
+  "pilot_informative_reads": 2695404.6829676772,
+  "pilot_per_million": 57.0,
+  "pilot_per_million_informative": 84.58841132121536,
+  "pilot_platform": "NovaSeq",
+  "pilot_reads": 4000000,
+  "rate_ratio": 0.9391346074993002,
+  "rate_ratio_ci95": [
+    0.7834943260192158,
+    1.1256926587892533
+  ],
+  "revised_contaminants": 239,
+  "revised_informative_reads": 4461236.0,
+  "revised_per_million": 53.53067262746011,
+  "revised_per_million_informative": 53.57259736987687,
+  "revised_platform": "MiSeq",
+  "revised_reads": 4464730,
+  "verdict": "No change is resolved: the point estimate is 0.94x and the interval (0.78-1.13) spans 1, so a change smaller than 1.29x can be neither ruled in nor out at this depth."
+}

@@ -342,6 +342,17 @@ def validate(config_path, only_library=None, verify_bam_hashes=True):
             )
         else:
             run_root = output_root / f"gex_{name}"
+        if config.get("gex_alignment", {}).get("backend", "star") == "kallisto":
+            try:
+                try:
+                    from scripts.gex_alignment import validate_completion
+                except ModuleNotFoundError:
+                    from gex_alignment import validate_completion
+                validate_completion(config, config_path, name, verify_outputs=False)
+            except (OSError, ValueError, KeyError) as exc:
+                errors.append(f"{name}: native kallisto handoff is invalid: {exc}")
+            manifests.append(path)
+            continue
         harmonized_path = (
             run_root / "process" / "csm_harmonized_bam.complete.json"
         )

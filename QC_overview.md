@@ -2,24 +2,33 @@
 
 This document summarizes the Quality Control (QC) pipeline designed for the ccPerturbSeq dataset. The analysis is orchestrated via the `scripts/qc_analysis.ipynb` notebook and is divided into four major analytical modules (Q1–Q4).
 
-## Environment setup
+## Environment setup and v2.0 scope
 
-Q1–Q4, the GEX carry-over QC, and the analysis notebooks share the tracked
-`csm_analysis` environment:
+Q1–Q4 notebooks/modules use the separate `csm_analysis` environment:
 
 ```bash
+# Run environment solving and scientific imports in a compute allocation.
 conda env create -f environment_qc.yml
-# For an existing environment:
-conda env update -n csm_analysis -f environment_qc.yml --prune
-
 conda activate csm_analysis
-python3 -c 'import edlib, matplotlib, pandas, pysam, scanpy, scipy, yaml'
+python -c 'import edlib, matplotlib, pandas, pysam, scanpy, scipy, yaml'
 ```
 
-Set `qc_conda_env: "csm_analysis"` in QC configurations and set
-`environment.conda_prefix` in the referenced main config to the output of
-`conda info --base`. UGER wrappers activate this environment inside compute
-jobs; it does not need to remain activated on the login node.
+The **GEX carry-over QC submission workflow uses production `splitpipe`**,
+because it replays Parse preprocessing and controlled STAR processing. It does
+not share the notebook environment merely because both are called QC. See
+[installation](docs/INSTALLATION.md#separate-analysis-environment) and the
+[carry-over QC guide](docs/GEX_GRNA_CONTAMINATION_QC.md). Configure your own
+Conda paths; rgupta access is optional.
+
+For v2.0, gene-target expression/KD QC expects gene-level expression. Keep
+kallisto `output_level: gene` or `both` when using those routines; target-level
+matrices and fractional counts require methods that support their feature/count
+semantics. The GEX UMI flavor affects expression counts, while guide assignment
+retains its independent Step 4 policy. Preserve backend/reference/UMI provenance
+when comparing QC results across runs.
+
+[Current workflow](docs/DETAILED_WORKFLOW.md) ·
+[Configuration](docs/CONFIGURATION.md) · [Documentation index](docs/README.md)
 
 ---
 

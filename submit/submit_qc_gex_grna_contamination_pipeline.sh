@@ -2,6 +2,7 @@
 # Submit the GEX gRNA contamination audit array and dependent aggregation job.
 
 set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/uger_common.sh"
 
 SUBMIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "${SUBMIT_DIR}")"
@@ -172,6 +173,15 @@ print(
 )
 ' "${QC_CONFIG}")
 
+# Reject invalid optional resources before dispatching any part of the graph.
+RESOURCE_CONFIG="${CSM_RESOURCE_CONFIG:-${QC_CONFIG}}"
+"${PYTHON_BIN}" "${_CSM_RESOURCE_SCRIPT}" --config "${RESOURCE_CONFIG}" --validate >/dev/null
+show_resource_command() {
+    local profile="$1"; shift
+    "${PYTHON_BIN}" "${_CSM_RESOURCE_SCRIPT}" --config "${RESOURCE_CONFIG}" \
+        --submit-profile "${profile}" --dry-run -- "$@"
+}
+
 # Render paths as their shared UGER locations. This also makes a local --dry-run
 # useful without leaking workstation-specific mount paths into qsub commands.
 if [[ "${QC_CONFIG}" == "${PROJECT_DIR}/"* ]]; then
@@ -222,8 +232,8 @@ echo "GEX gRNA contamination QC"
 echo "  Config:         ${JOB_QC_CONFIG}"
 echo "  Mode:           ${MODE}"
 echo "  Libraries:      ${N_LIBS}"
-echo "  Raw workers:    ${RAW_WORKERS} per library"
-echo "  Max concurrent: ${MAX_CONCURRENT}"
+echo "  Raw workers:    ${RAW_WORKERS} per library (fallback; uger overrides apply)"
+echo "  Max concurrent: ${MAX_CONCURRENT} (fallback; see resolved requests)"
 echo "  Logs:           ${LOG_DIR}"
 if [[ "${SUBMIT_ALIGNMENT}" == true ]]; then
     echo "  Controlled STAR: ${N_ALIGNMENT_TASKS} tasks, max ${ALIGNMENT_MAX_CONCURRENT} concurrent"
@@ -234,9 +244,8 @@ fi
 if [[ "${DRY_RUN}" == true ]]; then
     FINAL_DRY_HOLD=""
     if [[ "${SUBMIT_RAW}" == true ]]; then
-        printf '  Array command:'
-        printf ' %q' "${ARRAY_CMD[@]}"
-        printf '\n'
+        echo '  Array command:'
+        show_resource_command gex_contamination "${ARRAY_CMD[@]:1}"
         FINAL_DRY_HOLD="<qc_array_job_id>"
     fi
     if [[ "${SUBMIT_ALIGNMENT}" == true ]]; then
@@ -255,17 +264,18 @@ if [[ "${DRY_RUN}" == true ]]; then
         if [[ -n "${FINAL_DRY_HOLD}" ]]; then
             ALIGNMENT_CMD=(qsub -terse -hold_jid "${FINAL_DRY_HOLD}" "${ALIGNMENT_CMD[@]:2}")
         fi
-        printf '  Alignment command:'
-        printf ' %q' "${ALIGNMENT_CMD[@]}"
-        printf '\n'
+        echo '  Alignment command:'
+        show_resource_command gex_contamination_alignment "${ALIGNMENT_CMD[@]:1}"
         FINAL_DRY_HOLD="<alignment_array_job_id>"
     fi
     if [[ "${RUN_AGGREGATE}" == true ]]; then
-        if [[ -n "${FINAL_DRY_HOLD}" ]]; then
-            echo "  Aggregate: qsub -hold_jid ${FINAL_DRY_HOLD} submit_qc_gex_grna_contamination_aggregate.sh"
-        else
-            echo "  Aggregate: qsub submit_qc_gex_grna_contamination_aggregate.sh"
-        fi
+        echo '  Aggregate command:'
+        AGG_CMD=(-terse
+            -v "CSM_GEX_CONTAM_CONFIG=${JOB_QC_CONFIG},CSM_PROJECT_DIR=${HPC_PROJECT_DIR}"
+            -o "${LOG_DIR}/gex_grna_qc_aggregate.\$JOB_ID.log")
+        if [[ -n "${FINAL_DRY_HOLD}" ]]; then AGG_CMD+=(-hold_jid "${FINAL_DRY_HOLD}"); fi
+        show_resource_command gex_contamination_aggregate "${AGG_CMD[@]}" \
+            "${JOB_SUBMIT_DIR}/submit_qc_gex_grna_contamination_aggregate.sh"
     fi
     exit 0
 fi
@@ -273,7 +283,7 @@ fi
 mkdir -p "${LOG_DIR}"
 FINAL_HOLD_ID=""
 if [[ "${SUBMIT_RAW}" == true ]]; then
-    ARRAY_JOB_ID=$("${ARRAY_CMD[@]}")
+    ARRAY_JOB_ID=$(csm_qsub gex_contamination "${ARRAY_CMD[@]:1}")
     echo "  Submitted array job: ${ARRAY_JOB_ID}"
     FINAL_HOLD_ID="${ARRAY_JOB_ID%%.*}"
 fi
@@ -292,7 +302,7 @@ if [[ "${SUBMIT_ALIGNMENT}" == true ]]; then
     if [[ -n "${FINAL_HOLD_ID}" ]]; then
         ALIGNMENT_CMD=(qsub -terse -hold_jid "${FINAL_HOLD_ID}" "${ALIGNMENT_CMD[@]:2}")
     fi
-    ALIGNMENT_JOB_ID=$("${ALIGNMENT_CMD[@]}")
+    ALIGNMENT_JOB_ID=$(csm_qsub gex_contamination_alignment "${ALIGNMENT_CMD[@]:1}")
     echo "  Submitted controlled STAR array: ${ALIGNMENT_JOB_ID}"
     FINAL_HOLD_ID="${ALIGNMENT_JOB_ID%%.*}"
 fi
@@ -305,6 +315,6 @@ if [[ "${RUN_AGGREGATE}" == true ]]; then
     if [[ -n "${FINAL_HOLD_ID}" ]]; then
         AGG_CMD=(qsub -terse -hold_jid "${FINAL_HOLD_ID}" "${AGG_CMD[@]:2}")
     fi
-    AGG_JOB_ID=$("${AGG_CMD[@]}")
+    AGG_JOB_ID=$(csm_qsub gex_contamination_aggregate "${AGG_CMD[@]:1}")
     echo "  Submitted aggregate job: ${AGG_JOB_ID}"
 fi

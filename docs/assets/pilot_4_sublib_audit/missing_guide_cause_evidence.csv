@@ -1,0 +1,11 @@
+candidate_cause,assessment,evidence
+Low cell material,supported,"Missing-position cells have lower within-library GEX mapped-read distributions; this is an association, not a causal test."
+Insufficient guide sequencing depth,unsupported,Pilot gRNA saturation and rarefaction retain most threshold-5 calls at substantially reduced depth; deeper reads cannot restore absent molecules.
+Position-specific expression or capture,supported,"Position 1 was missing in 4,146 evidence-level cells versus position 2 in 224."
+Guide-specific performance,supported,Expected-guide dropout rates vary across guide identities after requiring at least 20 evaluable singlets.
+Extraction or construct matching failure,suggestive,Targeted raw-read replay compares structural pass/failure signatures by cell category; global Step-3 losses establish opportunity but not causality.
+iBAR decoupling,unsupported,Q2 threshold-5 decoupled evidence was 0.84%.
+Construct deletion or recombination,supported,Q1 construct-intact rate averaged 74.9%; Q1/Q2 also observed deletion/recombination signatures.
+Transcriptional silencing,not distinguishable,The pilot has no direct cassette-expression assay independent of capture and sequencing.
+Antibiotic escape,not distinguishable,"Selection survival was observed, but survival does not prove that both guide cassettes remained intact, expressed, captured, and matchable."
+Barcode collision,suggestive,"Barcode occupancy predicts a non-zero shared-barcode fraction, but this audit cannot link individual missing-guide cells to physical collisions."

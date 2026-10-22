@@ -1,5 +1,14 @@
 # C2 gRNA-to-GEX Misalignment Case Study
 
+> **Report scope (v2.0 documentation update).** Results below retain the
+> dataset, pipeline version and methods stated in their provenance. For current
+> installation and commands, use the [quick start](QUICKSTART.md),
+> [configuration reference](CONFIGURATION.md) and [UGER resource guide](UGER_RESOURCES.md).
+> Historical counts/timings are not measurements of the new kallisto backend.
+> This case study uses controlled STAR/BAM evidence. Kallisto provides
+> no genomic BAM; these coordinate-level results should not be transferred to it.
+
+
 ## Result
 
 C2 contained 11,683 full-length structural gRNA contaminants among 363,646,678

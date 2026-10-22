@@ -1,8 +1,10 @@
 import hashlib
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.splitpipe_gex_wrapper import (
     EXPECTED_SOURCE_SHA256,
@@ -13,6 +15,7 @@ from scripts.splitpipe_gex_wrapper import (
     install_runtime_overlay,
     parse_unified_diff,
     validate_splitpipe_tree,
+    _OverlayLoader,
 )
 
 
@@ -22,6 +25,20 @@ PATCH_FILE = ROOT / "patches" / "parsebio_splitpipe_1.6.4_gex_decontamination.pa
 
 
 class SplitpipeGexRuntimeOverlayTest(unittest.TestCase):
+    def test_alternative_kernels_replace_only_in_memory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "molinfo.py"
+            path.write_text("def collapse_polyN(umis, counts):\n    return dict(zip(umis, counts))\n")
+            original = path.read_bytes()
+            for flavor, expected in (("parse", 3), ("directional", 1), ("none", 3)):
+                module = types.ModuleType("splitpipe.molinfo")
+                _OverlayLoader(path, (), flavor).exec_module(module)
+                self.assertEqual(len(module.collapse_polyN(["AAAA", "AAAT", "AATT"], [5, 2, 1])), expected)
+                self.assertEqual(path.read_bytes(), original)
+            with patch("scripts.splitpipe_gex_wrapper.multiprocessing.get_start_method", return_value="spawn"):
+                with self.assertRaisesRegex(OverlayError, "fork"):
+                    install_runtime_overlay(SPLITPIPE_DIR, PATCH_FILE, "directional")
+
     def test_tracked_patch_transforms_both_pristine_modules(self):
         sections = parse_unified_diff(PATCH_FILE.read_text(encoding="utf-8"))
         self.assertEqual(set(MODULE_TO_SOURCE.values()), set(sections))

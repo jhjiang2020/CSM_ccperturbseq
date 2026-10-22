@@ -1,0 +1,3 @@
+platform,observed_read_pairs,informative_read_pairs,structural_contaminants,known_guide_contaminants,complete_reference_contaminants,structural_per_million,ci95_low_per_million,ci95_high_per_million,structural_per_million_informative,complete_reference_per_million
+MiSeq,4464730,4461236.0,239,217,216,53.53067262746011,47.16079885657572,60.760854691142995,53.57259736987687,48.37918530347859
+NovaSeq,4000000,2695404.6829676772,228,204,204,57.0,50.06607714529068,64.89417715611215,84.58841132121536,51.0

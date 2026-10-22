@@ -1,0 +1,51 @@
+{
+  "demux_total_matches_audit_total": true,
+  "per_sample": {
+    "GEX_10C": {
+      "raw_equals_valid_plus_rejected": true,
+      "rrna_families_reconcile": true,
+      "rrna_partitions_by_barcode_status": true
+    },
+    "GEX_10T": {
+      "raw_equals_valid_plus_rejected": true,
+      "rrna_families_reconcile": true,
+      "rrna_partitions_by_barcode_status": true
+    },
+    "GEX_20C": {
+      "raw_equals_valid_plus_rejected": true,
+      "rrna_families_reconcile": true,
+      "rrna_partitions_by_barcode_status": true
+    },
+    "GEX_20T": {
+      "raw_equals_valid_plus_rejected": true,
+      "rrna_families_reconcile": true,
+      "rrna_partitions_by_barcode_status": true
+    },
+    "GEX_50C": {
+      "raw_equals_valid_plus_rejected": true,
+      "rrna_families_reconcile": true,
+      "rrna_partitions_by_barcode_status": true
+    },
+    "GEX_50T": {
+      "raw_equals_valid_plus_rejected": true,
+      "rrna_families_reconcile": true,
+      "rrna_partitions_by_barcode_status": true
+    },
+    "GEX_5C": {
+      "raw_equals_valid_plus_rejected": true,
+      "rrna_families_reconcile": true,
+      "rrna_partitions_by_barcode_status": true
+    },
+    "GEX_5T": {
+      "raw_equals_valid_plus_rejected": true,
+      "rrna_families_reconcile": true,
+      "rrna_partitions_by_barcode_status": true
+    }
+  },
+  "report_path": "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/docs/GEX_RRNA_PROTOCOL_TEST_REPORT.md",
+  "run_id": "260806_M00622_0002_000000000-GY7KW",
+  "samples": 8,
+  "schema_version": 1,
+  "total_raw_read_pairs": 4464730,
+  "validated": true
+}

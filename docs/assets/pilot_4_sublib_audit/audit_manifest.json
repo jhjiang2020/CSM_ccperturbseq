@@ -1,0 +1,178 @@
+{
+  "anchors": {
+    "gex_good_cells": 37086,
+    "gex_grna_good_cells_t5": 31246
+  },
+  "assignment_validation": {
+    "assignment_cells_all_barcodes": 38325,
+    "assignment_rows": 45759,
+    "exact_multiset_match": true
+  },
+  "barcode_crossover_diagnostic": {
+    "aggregate_directory": "output/pilot_4_sublib_audit/barcode_crossover",
+    "complete": true,
+    "evaluation_interval": [
+      4000000,
+      6000000
+    ],
+    "evaluation_reads_per_library_arm": 500000,
+    "independent_reconciliation": {
+      "detailed_tables_in_docs_assets": false,
+      "evaluation_reads_per_library_arm": 500000,
+      "libraries": [
+        "C1",
+        "C2",
+        "T1",
+        "T2"
+      ],
+      "native_replay_warnings_over_3pp": 0,
+      "product_rows": {
+        "bc1_reference_summary.csv": 88,
+        "cycle_quality.csv": 5104,
+        "decoder_concordance.csv": 100,
+        "decoder_round_summary.csv": 280,
+        "decoder_summary.csv": 24,
+        "error_spectrum.csv": 2304,
+        "failure_mask_summary.csv": 64,
+        "linker_offset_summary.csv": 1953,
+        "linker_quality_by_status.csv": 112,
+        "linker_rescue_summary.csv": 2237,
+        "linker_summary.csv": 128,
+        "policy_grid.csv": 96,
+        "quality_by_round_outcome.csv": 120,
+        "round_mapping_summary.csv": 120
+      },
+      "published_identifiers_or_sequences": false,
+      "status": "passed",
+      "total_evaluation_reads": 4000000
+    },
+    "products": [
+      "bc1_reference_summary.csv",
+      "cycle_quality.csv",
+      "decoder_concordance.csv",
+      "decoder_round_summary.csv",
+      "decoder_summary.csv",
+      "error_spectrum.csv",
+      "failure_mask_summary.csv",
+      "linker_offset_summary.csv",
+      "linker_quality_by_status.csv",
+      "linker_rescue_summary.csv",
+      "linker_summary.csv",
+      "policy_grid.csv",
+      "quality_by_round_outcome.csv",
+      "round_mapping_summary.csv"
+    ],
+    "published_outputs_contain_identifiers_or_sequences": false
+  },
+  "barcode_rejection_diagnostic": {
+    "aggregate_directory": "output/pilot_4_sublib_audit/barcode_rejection",
+    "complete": true,
+    "independent_reconciliation": {
+      "detailed_tables_in_docs_assets": false,
+      "libraries": [
+        "C1",
+        "C2",
+        "T1",
+        "T2"
+      ],
+      "maximum_asset_table_bytes": 1000000,
+      "product_rows": {
+        "barcode_calibration_transfer.csv": 96,
+        "barcode_contract_parity.csv": 12,
+        "barcode_error_spectrum.csv": 2304,
+        "barcode_failure_by_round.csv": 84,
+        "barcode_policy_grid.csv": 192,
+        "barcode_quality_by_status.csv": 176,
+        "barcode_rejection_summary.csv": 88,
+        "barcode_well_balance.csv": 305
+      },
+      "published_identifiers_or_sequences": false,
+      "sample_partitions": 16,
+      "sampled_reads_by_library_arm": {
+        "C1:GEX": 1200000,
+        "C1:gRNA": 1200000,
+        "C2:GEX": 1200000,
+        "C2:gRNA": 1200000,
+        "T1:GEX": 1200000,
+        "T1:gRNA": 1200000,
+        "T2:GEX": 1200000,
+        "T2:gRNA": 1200000
+      },
+      "status": "passed"
+    },
+    "products": [
+      "barcode_calibration_transfer.csv",
+      "barcode_contract_parity.csv",
+      "barcode_error_spectrum.csv",
+      "barcode_failure_by_round.csv",
+      "barcode_policy_grid.csv",
+      "barcode_quality_by_status.csv",
+      "barcode_rejection_summary.csv",
+      "barcode_well_balance.csv"
+    ],
+    "published_outputs_contain_identifiers_or_sequences": false
+  },
+  "config": {
+    "mtime_ns": 1785261976977365000,
+    "path": "config.yaml",
+    "sha256": "4a25493cae4114db64ce2c87abc7d9eb79c022335596cee2f89388ba520ffd3a",
+    "size_bytes": 17125
+  },
+  "diagnostic": {
+    "barcode_level_table": "output/pilot_4_sublib_audit/work/cell_guide_diagnostic.csv.gz",
+    "gex_good_partition_cells": 37086,
+    "published_outputs_contain_identifiers": false,
+    "raw_diagnostic_complete": true,
+    "t5_final_good_cells": 31246
+  },
+  "fastq_validation_complete": true,
+  "inputs": [
+    {
+      "mtime_ns": 1774991778798791000,
+      "path": "output/grna_assignment/grna_qc_stats.yaml",
+      "sha256": "bf2f521af3cc9f4341ab2f0cbca583cd67ee1e6d93b135ff0b02c4b6defad9d0",
+      "size_bytes": 3105
+    },
+    {
+      "mtime_ns": 1774991759398923000,
+      "path": "output/grna_assignment/grna_cell_assignment.csv",
+      "sha256": "36701fc0b98f6a7934067ce4c9c6c10021542448d34e994a50b38c27b318557e",
+      "size_bytes": 6048568
+    },
+    {
+      "mtime_ns": 1774991777182985000,
+      "path": "output/grna_assignment/grna_umi_counts.csv.gz",
+      "size_bytes": 21632967
+    },
+    {
+      "mtime_ns": 1773190454783267000,
+      "path": "output/qc_analysis/q1_guideseq/q1_guideseq_summary.csv",
+      "sha256": "5503333ef5c53c25ae1fb937afd2b70cd48d14b37e76372390446d31d6b17c4b",
+      "size_bytes": 2954
+    },
+    {
+      "mtime_ns": 1774644441954954000,
+      "path": "output/qc_analysis/q2_decoupling_qc_summary.csv",
+      "sha256": "cc5c44d2f886c06beaa5718cfefbcf611c071f495e92ddf513de68b614fae843",
+      "size_bytes": 538
+    },
+    {
+      "mtime_ns": 1773685038823287000,
+      "path": "output/qc_analysis/q2_recombination_params.csv",
+      "sha256": "d108177b10890b42cd7a02882d04b3d893038241f4d255a8e1b4236b2e4608d8",
+      "size_bytes": 117
+    }
+  ],
+  "matrix_validation": {
+    "expected_metadata_total": 229032073,
+    "matrix_total": 229032073,
+    "status": "passed"
+  },
+  "schema_version": 1,
+  "typical_run": {
+    "cell_calling": "fixed_full_depth_pilot_cohort",
+    "gex_read_pairs": 20000000,
+    "grna_read_pairs": 1000000,
+    "loaded_cells": 1000
+  }
+}
