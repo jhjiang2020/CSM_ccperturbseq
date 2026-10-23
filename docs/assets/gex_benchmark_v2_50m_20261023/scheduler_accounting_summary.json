@@ -1,0 +1,11 @@
+{
+  "recorded_jobs": 37,
+  "accounted_tasks": 200,
+  "success_tasks": 126,
+  "failed_tasks": 74,
+  "scheduler_task_hours": 10.898265277777776,
+  "cpu_hours": 33.87652166666667,
+  "reserved_core_hours": 174.35178194444444,
+  "missing_accounting": [],
+  "exporter_sha256": "b9feb17629bef657f3c4d62fa8cb3bbe5fd570d5f35c2a7202b62e2b259139f5"
+}

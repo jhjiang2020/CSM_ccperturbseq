@@ -6,7 +6,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/uger_common.sh"
 
 SUBMIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "${SUBMIT_DIR}")"
-QC_CONFIG="${PROJECT_DIR}/qc_config_gex_grna_contamination.yaml"
+QC_CONFIG="${CSM_GEX_CONTAM_CONFIG:-}"
 MODE="all"
 MAX_CONCURRENT=2
 ALIGNMENT_MAX_CONCURRENT=""
@@ -64,6 +64,8 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+: "${QC_CONFIG:?Pass --config /absolute/path/to/my_qc.yaml; see examples/qc/README.md}"
+
 
 if [[ "${DRY_RUN}" != true ]] && ! command -v qsub >/dev/null 2>&1; then
     echo "ERROR: qsub is unavailable. On Broad run:" >&2

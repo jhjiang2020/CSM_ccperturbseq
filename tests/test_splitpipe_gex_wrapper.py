@@ -1,4 +1,5 @@
 import hashlib
+import os
 import sys
 import tempfile
 import types
@@ -20,10 +21,14 @@ from scripts.splitpipe_gex_wrapper import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SPLITPIPE_DIR = ROOT / "ParseBiosciences-Pipeline.1.6.4"
+SPLITPIPE_DIR = Path(os.environ.get(
+    "CSM_TEST_SPLITPIPE_DIR", ROOT / "ParseBiosciences-Pipeline.1.6.4"
+))
 PATCH_FILE = ROOT / "patches" / "parsebio_splitpipe_1.6.4_gex_decontamination.patch"
 
 
+@unittest.skipUnless((SPLITPIPE_DIR / "split-pipe").is_file(),
+                     "Set CSM_TEST_SPLITPIPE_DIR to separately installed Parse 1.6.4")
 class SplitpipeGexRuntimeOverlayTest(unittest.TestCase):
     def test_alternative_kernels_replace_only_in_memory(self):
         with tempfile.TemporaryDirectory() as tmp:

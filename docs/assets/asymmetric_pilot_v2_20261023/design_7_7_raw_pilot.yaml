@@ -1,0 +1,53 @@
+status: ok
+sample_limit: 10000
+sampled_reads: 1920
+extracted_reads: 1920
+exact_guide_reads: 1920
+observed_spacer_length_counts:
+  21: 1236
+  20: 684
+observed_ibar_length_counts:
+  1:
+    7: 960
+  2:
+    7: 960
+orientation:
+  1: as_reference
+  2: as_reference
+file_orientation_evidence:
+  control_R1_001.fastq.gz:
+    1:
+      stored_only: 960
+      rc_only: 0
+    2:
+      stored_only: 960
+      rc_only: 0
+orientation_evidence:
+  discovery:
+    1:
+      informative: 480
+      stored_only: 480
+      rc_only: 0
+      both: 0
+    2:
+      informative: 480
+      stored_only: 480
+      rc_only: 0
+      both: 0
+  validation:
+    1:
+      informative: 480
+      stored_only: 480
+      rc_only: 0
+      both: 0
+    2:
+      informative: 480
+      stored_only: 480
+      rc_only: 0
+      both: 0
+warnings: []
+fingerprint: 95786673cfc5234eef4cd88a037050a3114ff5e9fddfbebfc1bba4f8dfb99811
+input_type: raw_fastq
+library: POOL
+reference_path: /medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/tests/fixtures/asymmetric_pilot_v2/reference_7_7.csv
+configured_ibar_length: 7

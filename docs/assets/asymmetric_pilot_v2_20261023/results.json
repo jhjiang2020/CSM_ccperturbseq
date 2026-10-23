@@ -1,0 +1,309 @@
+{
+  "cases": {
+    "design_7_4": {
+      "candidate_errors": 0,
+      "cells": 240,
+      "count_errors": 0,
+      "detection_status_counts": {
+        "complete": 80,
+        "inferred": 160
+      },
+      "extraction_errors": 0,
+      "observed_ibar_lengths": {
+        "1": {
+          "7": 960
+        },
+        "2": {
+          "4": 960
+        }
+      },
+      "orientation": {
+        "1": "as_reference",
+        "2": "as_reference"
+      },
+      "pilot_status": "ok",
+      "reads": 1920,
+      "umi_count": 960
+    },
+    "design_7_7": {
+      "candidate_errors": 0,
+      "cells": 240,
+      "count_errors": 0,
+      "detection_status_counts": {
+        "complete": 80,
+        "inferred": 160
+      },
+      "extraction_errors": 0,
+      "observed_ibar_lengths": {
+        "1": {
+          "7": 960
+        },
+        "2": {
+          "7": 960
+        }
+      },
+      "orientation": {
+        "1": "as_reference",
+        "2": "as_reference"
+      },
+      "pilot_status": "ok",
+      "reads": 1920,
+      "umi_count": 960
+    },
+    "legacy_7_7": {
+      "candidate_errors": 0,
+      "cells": 240,
+      "count_errors": 0,
+      "detection_status_counts": {
+        "complete": 80,
+        "inferred": 160
+      },
+      "extraction_errors": 0,
+      "observed_ibar_lengths": null,
+      "orientation": null,
+      "pilot_status": "ok",
+      "reads": 1920,
+      "umi_count": 960
+    }
+  },
+  "commands": [
+    {
+      "argv": [
+        "/medpop/rgupta/Jiahao/conda/envs/splitpipe/bin/python",
+        "-B",
+        "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/scripts/03_match_grna_ibar.py",
+        "--config",
+        "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/final/validation/legacy_7_7.yaml",
+        "--preflight-only",
+        "--preflight-fastq"
+      ],
+      "exit_code": 0,
+      "label": "legacy_7_7_raw_pilot"
+    },
+    {
+      "argv": [
+        "/medpop/rgupta/Jiahao/conda/envs/splitpipe/bin/python",
+        "-B",
+        "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/scripts/03_match_grna_ibar.py",
+        "--config",
+        "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/final/validation/legacy_7_7.yaml",
+        "--barcode-input",
+        "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/tests/fixtures/asymmetric_pilot_v2/symmetric_barcodes.tsv.gz",
+        "--n_processes",
+        "2",
+        "--chunk_size",
+        "100"
+      ],
+      "exit_code": 0,
+      "label": "legacy_7_7_step3"
+    },
+    {
+      "argv": [
+        "/medpop/rgupta/Jiahao/conda/envs/splitpipe/bin/python",
+        "-B",
+        "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/scripts/04_assign_grna_to_cells.py",
+        "--config",
+        "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/final/validation/legacy_7_7.yaml",
+        "--ncpus",
+        "2"
+      ],
+      "exit_code": 0,
+      "label": "legacy_7_7_step4"
+    },
+    {
+      "argv": [
+        "/medpop/rgupta/Jiahao/conda/envs/splitpipe/bin/python",
+        "-B",
+        "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/scripts/03_match_grna_ibar.py",
+        "--config",
+        "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/final/validation/design_7_7.yaml",
+        "--preflight-only",
+        "--preflight-fastq"
+      ],
+      "exit_code": 0,
+      "label": "design_7_7_raw_pilot"
+    },
+    {
+      "argv": [
+        "/medpop/rgupta/Jiahao/conda/envs/splitpipe/bin/python",
+        "-B",
+        "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/scripts/03_match_grna_ibar.py",
+        "--config",
+        "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/final/validation/design_7_7.yaml",
+        "--barcode-input",
+        "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/tests/fixtures/asymmetric_pilot_v2/symmetric_barcodes.tsv.gz",
+        "--n_processes",
+        "2",
+        "--chunk_size",
+        "100"
+      ],
+      "exit_code": 0,
+      "label": "design_7_7_step3"
+    },
+    {
+      "argv": [
+        "/medpop/rgupta/Jiahao/conda/envs/splitpipe/bin/python",
+        "-B",
+        "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/scripts/04_assign_grna_to_cells.py",
+        "--config",
+        "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/final/validation/design_7_7.yaml",
+        "--ncpus",
+        "2"
+      ],
+      "exit_code": 0,
+      "label": "design_7_7_step4"
+    },
+    {
+      "argv": [
+        "/medpop/rgupta/Jiahao/conda/envs/splitpipe/bin/python",
+        "-B",
+        "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/scripts/03_match_grna_ibar.py",
+        "--config",
+        "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/final/validation/design_7_4.yaml",
+        "--preflight-only",
+        "--preflight-fastq"
+      ],
+      "exit_code": 0,
+      "label": "design_7_4_raw_pilot"
+    },
+    {
+      "argv": [
+        "/medpop/rgupta/Jiahao/conda/envs/splitpipe/bin/python",
+        "-B",
+        "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/scripts/03_match_grna_ibar.py",
+        "--config",
+        "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/final/validation/design_7_4.yaml",
+        "--barcode-input",
+        "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/tests/fixtures/asymmetric_pilot_v2/asymmetric_barcodes.tsv.gz",
+        "--n_processes",
+        "2",
+        "--chunk_size",
+        "100"
+      ],
+      "exit_code": 0,
+      "label": "design_7_4_step3"
+    },
+    {
+      "argv": [
+        "/medpop/rgupta/Jiahao/conda/envs/splitpipe/bin/python",
+        "-B",
+        "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/scripts/04_assign_grna_to_cells.py",
+        "--config",
+        "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/final/validation/design_7_4.yaml",
+        "--ncpus",
+        "2"
+      ],
+      "exit_code": 0,
+      "label": "design_7_4_step4"
+    },
+    {
+      "argv": [
+        "/medpop/rgupta/Jiahao/conda/envs/splitpipe/bin/python",
+        "-B",
+        "-c",
+        "import json, sys, unittest; names = ['test_guide_design.py', 'test_step3_matching.py', 'test_grna_preflight.py', 'test_step1c_adapters.py', 'test_step1c_evidence_merge.py', 'test_gex_grna_filter.py', 'test_gex_grna_preprocess_hook.py', 'test_gex_grna_bam_filter.py', 'test_asymmetric_pilot.py']; loader = unittest.TestLoader(); suite = unittest.TestSuite(loader.discover(\"tests\", pattern=name) for name in names); result = unittest.TextTestRunner(verbosity=2).run(suite); json.dump(dict(tests=result.testsRun, failures=len(result.failures), errors=len(result.errors), skipped=len(result.skipped)), open('/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/final/validation/regression_summary.json', \"w\"), indent=2); sys.exit(not result.wasSuccessful())"
+      ],
+      "exit_code": 0,
+      "label": "regression_tests"
+    }
+  ],
+  "conda_prefix": "/medpop/rgupta/Jiahao/conda/envs/splitpipe",
+  "executable": "/medpop/rgupta/Jiahao/conda/envs/splitpipe/bin/python",
+  "fixture_sha256": "e82bb41b162b027c677578593b0bfab3678fe23e8d497fc5bc0b57d3e7f5e446",
+  "host": "uger-rh8-d004.broadinstitute.org",
+  "job_id": "62581448",
+  "packages": {
+    "PyYAML": "6.0.3",
+    "anndata": "0.12.10",
+    "edlib": "1.3.9.post1",
+    "numpy": "2.2.6",
+    "pandas": "2.3.3",
+    "pytest": null,
+    "scanpy": "1.12",
+    "scipy": "1.17.0"
+  },
+  "passed": true,
+  "platform": "Linux-4.18.0-553.164.1.el8_10.x86_64-x86_64-with-glibc2.28",
+  "python": "3.12.12 | packaged by conda-forge | (main, Oct 22 2025, 23:25:55) [GCC 14.3.0]",
+  "regression_tests": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 102
+  },
+  "source_sha256": {
+    "scripts/00_format_reference.py": "82d020b4b95cdb87b8a7508c2c83c33ede018f6b7be55c7c70338f848e085323",
+    "scripts/01c_process_gex_grna.py": "0f6f545508f4cab3e4d97eef583f74420c0ab66c631f0525db06386e669fd051",
+    "scripts/02_extract_grna_barcodes.py": "06432227f997bf2bc0a8a720b98580a7712ea201efddb68d49e3c5ea75603f6e",
+    "scripts/03_match_grna_ibar.py": "a41cf1ca373b3c03c9948c41ebaffdf489803f09cf07fb56dc10477ff6d36076",
+    "scripts/04_assign_grna_to_cells.py": "929db7ac3e0bcbb9cec58a15e51f2ae909d297834bc894d2bb9c83d5146fdb36",
+    "scripts/05_build_anndata.py": "fda6ad9173f204df9af07270cd04649ab260f8812cf03881374c2d78b0d844b8",
+    "scripts/barcode_contract.py": "2b3d89238d15a98e485d2e62e83b9d23d9c801f25844e0b11b76d8b5e0f17813",
+    "scripts/barcode_crossover_audit.py": "3eacc22643266659c9fc09d527de56fe2c9906b1be09f2095bfbc0e9264881ec",
+    "scripts/barcode_rejection_qc.py": "1fee0eded04e5b4a9c365dbdda53216202acf361074f2d238bd5200404e5b90d",
+    "scripts/benchmark_gex_backends.py": "237a484ac375af1887c31d06b4c08eb842f16dc1d34b17926fe4d7fbf8768848",
+    "scripts/benchmark_gex_report.py": "067c4e46dc8edf88a409c834adc5cb1685eafba5589c1eac4fce992a1a9a1707",
+    "scripts/benchmark_gex_scheduler_report.py": "b9feb17629bef657f3c4d62fa8cb3bbe5fd570d5f35c2a7202b62e2b259139f5",
+    "scripts/benchmark_gex_v2.py": "27c5d913888c470f602b578c87684c3af9ec41aa18996b6dbd5eaf074917ae86",
+    "scripts/benchmark_gex_v2_report.py": "a3d437ff53c8a55a009327facbae1fed1186312d09719cee116e5db0e5f13585",
+    "scripts/benchmark_kallisto_optimization.py": "a2ee06aa6bc4d0d1e436eb315f3f20070ada4e6a4772e5bd66bd0292942bc5e6",
+    "scripts/build_kallisto_reference.py": "466fbbfdedf33c3cfd0bd6133e063e8b1f4193d925ad2bdedad7d12d53e67fa8",
+    "scripts/c2_gex_grna_case_study.py": "188a7d00f14706bf9671367e6021d6030ac3635ec1247ac9094deed84945c359",
+    "scripts/combine_kallisto_gex.py": "159552749286f0c41236779791a1ea17967f627c3d1c82afbed7c9174b443beb",
+    "scripts/design_preflight.py": "58d8093802a398a3cddf6f75f71d51ffe5f85bee1c911af0983a162f82b4c6aa",
+    "scripts/external_rrna_audit.py": "043e55fb0ee1bb5591bfe6f13ed299dc1a7576efe02512a03cae5100d26890f4",
+    "scripts/fix_splitpipe_combine.py": "4e13cbded841fa94e0100f3bc45703b782bcbc620e46ae62b6fbcdb0d10f5819",
+    "scripts/gex_alignment.py": "701bef08b40949fa9fb7f0fbc802fcf525cec51140fcf1151c346858bdf15d7b",
+    "scripts/gex_counting.py": "a5f9febbff307a756a930cf5a3ea7aea96300b6fef506ec3ca47eac0edf8795a",
+    "scripts/gex_demux_qc.py": "fca9434c8c30ecf05fb5f5d6d833af4bf1c87875b0187fd163a6140a6597d20f",
+    "scripts/gex_grna_bam_filter.py": "483d6883e6015b8cd1f14ba74f40207b0dee6794e04a115a7146bfc5768e6f29",
+    "scripts/gex_grna_carryover_rate.py": "88125ea085e163cf10946e6cec08c91952bcabe9ae41e76adcce6e05e477a469",
+    "scripts/gex_grna_filter.py": "da6007b6cb91bb72b2c59f52af9b4fd0d1d2e774ab4a8610fba686fb27247588",
+    "scripts/gex_grna_preprocess_hook.py": "15c66782d9b8345edf80873a44532607a5d27947abe8a871b2576a5b3928ad00",
+    "scripts/gex_rrna_protocol_compare.py": "e451165ac040dafb0e3f3424f809a838cde0c9b64693bbfc92789fa755504e04",
+    "scripts/gex_runtime.py": "8b33819e409d97ddf1b66733eac40e6f7c646902b0ba29235cebfaf534ec2d31",
+    "scripts/gex_umi_saturation.py": "9963e05cfa3ceef09ca7cb3f13e0405add93b5cbeb7eb5c1142ffd404d0c5cbe",
+    "scripts/grna_preflight.py": "bb876a1ce115e6126fd8daff0afbd7c11d874e7c74e402f0fa3baac4f949731b",
+    "scripts/guide_design.py": "5ead06c509af83058dee12d413517308400659282db75a9db6cf5af4f529c903",
+    "scripts/guide_design_qc.py": "a2b3d371ce27b366edf1137ad6d2d21e6f9b753b8332d700358fec0a6536c2ee",
+    "scripts/guideseq_helpers.py": "f3c7632c3ed1dd340c80f1e1002b88c9f2c43ea1c46790b6e0f25ce59a3d7a20",
+    "scripts/kallisto_count_parallel.py": "b64404c46727301791ad5acaad8b414f20e8a538b955db80e069e7efaca03650",
+    "scripts/kallisto_umi.py": "13844429ec8bb74dc4018e790a77e5ad0fd0c5d2dddd167770e44e094589b41c",
+    "scripts/pilot_barcode_collision.py": "71150c09b16e76792394d16064526b4332e5bb8bb88937c00c496e896f00330a",
+    "scripts/pilot_cell_guide_diagnostic.py": "d1ac2640dd916321e5607c9cdb68b2cac839d11264a27d151754bedc30e0e189",
+    "scripts/pilot_screen_audit.py": "1a81b49ab9cd850cc90ad2f8d6cd0a3f9e5497825ca64c4394800da1098f37ae",
+    "scripts/publish_shared_kallisto_environment.py": "424553693fe3e1ae27c685cc28cbbea54552795fc3be3a1232f6284c7c96670a",
+    "scripts/qc_config_loader.py": "45363732cdcaf981d7ae68fe9a4935462a21d913499cac02a0c70867e3b6d56a",
+    "scripts/qc_fastq_resolver.py": "41239e6393f3fad286d48bbaee6d398f569cb4937dcb71afcefef0c7351e9fd8",
+    "scripts/qc_gex_grna_contamination.py": "cf4ad036cba9ace0ca06a08bc28f4046e7f3c676fa271820a43fad6fdb1f3ba9",
+    "scripts/qc_gex_grna_parallel.py": "ad03e17e8801ad089467c66de6b9c63f2b3762e0fa072d0e4600908ec0cb65a6",
+    "scripts/qc_q1_guideseq.py": "b5d68a0bbeb1f09363fb243b1922635c87d9dc16a7eae0efc813f6d39b945bbf",
+    "scripts/qc_q2_recombination.py": "9552095b9beb33b92abcb85e9343608b4c75c87918470cd25ea31ec3e0591c7e",
+    "scripts/qc_q3_kd_efficacy.py": "b26f081d0f393de5771696193dfc1a5b857e54c25372129294af88ddad1ae713",
+    "scripts/qc_q4_fitness.py": "fbca17dc5bbbb8a449fdb821692337fe0a70f7171c3bb095108defb03eb1823d",
+    "scripts/rrna_barcode_diagnostic.py": "349ba30ef1a96de93c8d4cceae1134db2a60dc4a695c24f4d954601d3966b77e",
+    "scripts/run_kallisto_gex.py": "aad17d8547c3d0b8d22d7ec3fa65ecd60e14081e6a9ce69a74d0ad5e4c0344df",
+    "scripts/run_star_fractional.py": "ad6312bff7c68397c3092e1dca90651fefcc7d23be4188738e105d2168de0c47",
+    "scripts/sc_step3_qc_failures.py": "346b18197e14f7bfda35c9d789d7fa600a4357b2eaebc23a6badf5474ffedd57",
+    "scripts/splitpipe_gex_wrapper.py": "345e534f3020ea2833c502e0ef8d02fbf176f98890cd90c891a7dcfe4ed45a6c",
+    "scripts/splitpipe_wrapper.py": "51cf1f4459c3727971eb66e3c01b1392b6ced6a46d3ad429cab9b6fda92e34a4",
+    "scripts/uger_resources.py": "db5dc84b516462bed0c7fabccb7f0c874f113c5c2bc821002386905cefd77a28",
+    "scripts/validate_asymmetric_pilot.py": "39d2db28c73c3371e16e5afed4d8cacaa70cbe767366d8dfe894c772f40432d1",
+    "scripts/validate_gex_filter_manifests.py": "54457521ca8702e185eb6aa97f8b6c8879bf36c374ef13f56cf522b4c1bf4053",
+    "scripts/validate_step1c_manifests.py": "5e197a446a1bb3ec1de541e0bacb84de345e00c51352134833cf4d2ee4e6fbd4",
+    "scripts/write_fastq_input_identity.py": "e9800809efd49a0912c90d222d6429c99354d10f70e9fc280474a63ab0b828ba"
+  },
+  "symmetric_legacy_equivalence": true,
+  "test_sha256": {
+    "test_asymmetric_pilot.py": "7ec73149ac974cfd65fa23635ec01ef556a58395eddd365b12614c9d4ceba49a",
+    "test_gex_grna_bam_filter.py": "1607a8c4b620b8fbab6b5513afcf816e1193f20fad8d8f3d5dcde7c9c43c09c1",
+    "test_gex_grna_filter.py": "6321e21d8807b0c7582d351b5a7da17a4b9dd14c4eeb7516e2f14ad8ef76cde4",
+    "test_gex_grna_preprocess_hook.py": "e62a7d9da0df1a1e599d5b55822485c266aafb26f956b063c6588ad4ffb56980",
+    "test_grna_preflight.py": "b6ec25b187aa6c6ab973cab5bd9578fac98752c4dbdc2c35dfa67aa83b032fde",
+    "test_guide_design.py": "39d427f595cce198a3e122ca3e08196967bedfcbb409f1240532f362b4ed1631",
+    "test_step1c_adapters.py": "415cf09ea0e49b1cd0ebe9155eb84cf7a96f30a5ba116e88b87dc0d380573dad",
+    "test_step1c_evidence_merge.py": "a50f2a4f6dc2f29ebd955c6c739da819c326b42b7ea21771986d1859d345fa4c",
+    "test_step3_matching.py": "36b912416034d69d5e985003dfa475ab8351f9c4a8a7d93f5d93bcc0a3e3365c"
+  },
+  "workers": 2
+}

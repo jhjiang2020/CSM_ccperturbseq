@@ -1,0 +1,142 @@
+test_ambiguous_units_and_joint_pair_resolution (test_guide_design.DesignContractTest.test_ambiguous_units_and_joint_pair_resolution) ... ok
+test_close_codewords_cannot_be_fuzzy_corrected (test_guide_design.DesignContractTest.test_close_codewords_cannot_be_fuzzy_corrected) ... ok
+test_conflict_is_retained_and_truncation_is_not_absence (test_guide_design.DesignContractTest.test_conflict_is_retained_and_truncation_is_not_absence) ... ok
+test_duplicate_full_signatures_stay_ambiguous (test_guide_design.DesignContractTest.test_duplicate_full_signatures_stay_ambiguous) ... ok
+test_fingerprint_covers_annotations_and_matching_policy (test_guide_design.DesignContractTest.test_fingerprint_covers_annotations_and_matching_policy) ... ok
+test_foreign_known_ibar_remains_decoupling_evidence (test_guide_design.DesignContractTest.test_foreign_known_ibar_remains_decoupling_evidence) ... ok
+test_ibar_indel_is_not_reassigned_to_the_other_position (test_guide_design.DesignContractTest.test_ibar_indel_is_not_reassigned_to_the_other_position) ... ok
+test_invalid_bases_and_incomplete_pairs_are_rejected (test_guide_design.DesignContractTest.test_invalid_bases_and_incomplete_pairs_are_rejected) ... ok
+test_length_identifies_position_with_identical_scaffolds (test_guide_design.DesignContractTest.test_length_identifies_position_with_identical_scaffolds) ... ok
+test_linked_recombination_without_ibar_pair_uniqueness (test_guide_design.DesignContractTest.test_linked_recombination_without_ibar_pair_uniqueness) ... ok
+test_model_capability_depends_on_design_identifiability (test_guide_design.DesignContractTest.test_model_capability_depends_on_design_identifiability) ... ok
+test_partner_inference_can_be_disabled_without_losing_guide_counts (test_guide_design.DesignContractTest.test_partner_inference_can_be_disabled_without_losing_guide_counts) ... ok
+test_position_ambiguous_guides_retain_molecules (test_guide_design.DesignContractTest.test_position_ambiguous_guides_retain_molecules) ... ok
+test_shared_evidence_never_inflates_counts (test_guide_design.DesignContractTest.test_shared_evidence_never_inflates_counts) ... ok
+test_short_ibar_correction_and_explicit_conflicts (test_guide_design.DesignContractTest.test_short_ibar_correction_and_explicit_conflicts) ... ok
+test_supported_layouts_and_absence (test_guide_design.DesignContractTest.test_supported_layouts_and_absence) ... ok
+test_anndata_contract_summary_has_serializable_values (test_guide_design.DesignWorkflowTest.test_anndata_contract_summary_has_serializable_values) ... ok
+test_cli_matching_and_counting_for_asymmetric_and_no_ibar (test_guide_design.DesignWorkflowTest.test_cli_matching_and_counting_for_asymmetric_and_no_ibar) ... ok
+test_frozen_orientation_is_used_when_production_pilot_is_disabled (test_guide_design.DesignWorkflowTest.test_frozen_orientation_is_used_when_production_pilot_is_disabled) ... ok
+test_full_step4_cli_and_stale_design_rejection (test_guide_design.DesignWorkflowTest.test_full_step4_cli_and_stale_design_rejection) ... ok
+test_gex_filter_uses_reference_lengths_without_ibar_requirements (test_guide_design.DesignWorkflowTest.test_gex_filter_uses_reference_lengths_without_ibar_requirements) ... ok
+test_linked_qc_uses_spacers_with_no_ibars (test_guide_design.DesignWorkflowTest.test_linked_qc_uses_spacers_with_no_ibars) ... ok
+test_mixed_file_orientation_does_not_auto_flip (test_guide_design.DesignWorkflowTest.test_mixed_file_orientation_does_not_auto_flip) ... ok
+test_pilot_discovers_lengths_orientation_and_zero_ibar (test_guide_design.DesignWorkflowTest.test_pilot_discovers_lengths_orientation_and_zero_ibar) ... ok
+test_pilot_reports_wrong_lengths_without_rewriting_the_design (test_guide_design.DesignWorkflowTest.test_pilot_reports_wrong_lengths_without_rewriting_the_design) ... ok
+test_q1_loader_inherits_design_and_resolves_contract_path (test_guide_design.DesignWorkflowTest.test_q1_loader_inherits_design_and_resolves_contract_path) ... ok
+test_step0_writes_capabilities_and_preserves_empty_ibar (test_guide_design.DesignWorkflowTest.test_step0_writes_capabilities_and_preserves_empty_ibar) ... ok
+test_step1c_accepts_design_absence_and_rejects_scaffold_conflict (test_guide_design.DesignWorkflowTest.test_step1c_accepts_design_absence_and_rejects_scaffold_conflict) ... ok
+test_symmetric_matching_preserves_legacy_calls (test_guide_design.DesignWorkflowTest.test_symmetric_matching_preserves_legacy_calls) ... ok
+test_unavailable_qc_is_null_with_reason (test_guide_design.DesignWorkflowTest.test_unavailable_qc_is_null_with_reason) ... ok
+test_fuzzy_matching_agrees_with_exhaustive_distance_search (test_step3_matching.MatchingScalabilityTest.test_fuzzy_matching_agrees_with_exhaustive_distance_search) ... ok
+test_work_and_completed_results_stay_bounded (test_step3_matching.MatchingScalabilityTest.test_work_and_completed_results_stay_bounded) ... ok
+test_worker_errors_are_not_swallowed (test_step3_matching.MatchingScalabilityTest.test_worker_errors_are_not_swallowed) ... ok
+test_automatic_warning_precedes_matching_and_parallel_calls_agree (test_step3_matching.Step3CommandTest.test_automatic_warning_precedes_matching_and_parallel_calls_agree) ... ok
+test_explicit_preflight_overrides_disabled_automatic_check (test_step3_matching.Step3CommandTest.test_explicit_preflight_overrides_disabled_automatic_check) ... ok
+test_preflight_only_warns_and_never_opens_production_outputs (test_step3_matching.Step3CommandTest.test_preflight_only_warns_and_never_opens_production_outputs) ... ok
+test_raw_fastq_preflight_works_before_barcode_extraction (test_step3_matching.Step3CommandTest.test_raw_fastq_preflight_works_before_barcode_extraction) ... ok
+test_correct_orientation_has_no_warning (test_grna_preflight.IbarPreflightTest.test_correct_orientation_has_no_warning) ... ok
+test_invalid_reference_is_reported (test_grna_preflight.IbarPreflightTest.test_invalid_reference_is_reported) ... ok
+test_length_low_support_and_structure_diagnostics (test_grna_preflight.IbarPreflightTest.test_length_low_support_and_structure_diagnostics) ... ok
+test_options_preserve_old_configs_and_validate_new_values (test_grna_preflight.IbarPreflightTest.test_options_preserve_old_configs_and_validate_new_values) ... ok
+test_palindromes_and_sparse_samples_are_inconclusive (test_grna_preflight.IbarPreflightTest.test_palindromes_and_sparse_samples_are_inconclusive) ... ok
+test_reversed_orientation_warns_without_changing_reference (test_grna_preflight.IbarPreflightTest.test_reversed_orientation_warns_without_changing_reference) ... ok
+test_same_guide_evidence_handles_rc_closed_global_reference (test_grna_preflight.IbarPreflightTest.test_same_guide_evidence_handles_rc_closed_global_reference) ... ok
+test_sample_is_bounded_and_no_ibar_skips_input (test_grna_preflight.IbarPreflightTest.test_sample_is_bounded_and_no_ibar_skips_input) ... ok
+test_shared_guides_and_multiple_ibars_do_not_double_count (test_grna_preflight.IbarPreflightTest.test_shared_guides_and_multiple_ibars_do_not_double_count) ... ok
+test_default_output_layout_is_unchanged (test_step1c_adapters.Step1cAdapterTests.test_default_output_layout_is_unchanged) ... ok
+test_dual_short_r1_emits_ibar_warning (test_step1c_adapters.Step1cAdapterTests.test_dual_short_r1_emits_ibar_warning) ... WARNING: all sampled GEX-derived gRNA R1 reads are shorter than the approximate full-iBAR requirement (54 < 76 bp). Step 1a removal remains valid, but ordinary dual-guide Step 3 will generally reject these reads; no guide-only dual identity will be invented.
+ok
+test_runner_dry_run_needs_no_splitpipe_import (test_step1c_adapters.Step1cAdapterTests.test_runner_dry_run_needs_no_splitpipe_import) ... ok
+test_runner_runs_step3_directly_on_step1a_barcode_evidence (test_step1c_adapters.Step1cAdapterTests.test_runner_runs_step3_directly_on_step1a_barcode_evidence) ... ok
+test_step1c_rejects_stale_or_recalibrated_evidence (test_step1c_adapters.Step1cAdapterTests.test_step1c_rejects_stale_or_recalibrated_evidence) ... ok
+test_step1c_validator_rejects_stale_config (test_step1c_adapters.Step1cAdapterTests.test_step1c_validator_rejects_stale_config) ... ok
+test_strict_step1c_product_preserves_raw_step3_matches (test_step1c_adapters.Step1cAdapterTests.test_strict_step1c_product_preserves_raw_step3_matches) ... ok
+test_combined_product_resolves_both_namespaces_and_calls_guides (test_step1c_evidence_merge.Step1cEvidenceMergeTests.test_combined_product_resolves_both_namespaces_and_calls_guides) ... ok
+test_dual_gex_evidence_requires_resolved_ibar (test_step1c_evidence_merge.Step1cEvidenceMergeTests.test_dual_gex_evidence_requires_resolved_ibar) ... ok
+test_gex_product_allows_complete_zero_match_inputs (test_step1c_evidence_merge.Step1cEvidenceMergeTests.test_gex_product_allows_complete_zero_match_inputs) ... ok
+test_gex_product_uses_separate_namespace_and_documented_names (test_step1c_evidence_merge.Step1cEvidenceMergeTests.test_gex_product_uses_separate_namespace_and_documented_names) ... ok
+test_sources_combine_before_read_filter_and_count_overlap_once (test_step1c_evidence_merge.Step1cEvidenceMergeTests.test_sources_combine_before_read_filter_and_count_overlap_once) ... ok
+test_step5_preserves_dedicated_pair_metadata_for_comparison (test_step1c_evidence_merge.Step1cEvidenceMergeTests.test_step5_preserves_dedicated_pair_metadata_for_comparison) ... ok
+test_step5_sparse_alignment_preserves_order_without_densifying (test_step1c_evidence_merge.Step1cEvidenceMergeTests.test_step5_sparse_alignment_preserves_order_without_densifying) ... ok
+test_loads_relative_reference_and_comments (test_gex_grna_filter.ConfigLoadingTest.test_loads_relative_reference_and_comments) ... ok
+test_rejects_incompatible_packed_policy (test_gex_grna_filter.ConfigLoadingTest.test_rejects_incompatible_packed_policy) ... ok
+test_complementary_masks_and_stats_are_immutable (test_gex_grna_filter.PackedEncodingTest.test_complementary_masks_and_stats_are_immutable) ... ok
+test_every_single_substitution_is_retrieved_for_20_and_21mers (test_gex_grna_filter.PackedEncodingTest.test_every_single_substitution_is_retrieved_for_20_and_21mers) ... ok
+test_exact_lookup_precedes_seed_search_and_collapses_duplicate_rows (test_gex_grna_filter.PackedEncodingTest.test_exact_lookup_precedes_seed_search_and_collapses_duplicate_rows) ... ok
+test_reference_validation_rejects_lowercase_and_wrong_lengths (test_gex_grna_filter.PackedEncodingTest.test_reference_validation_rejects_lowercase_and_wrong_lengths) ... ok
+test_tied_neighbor_reports_anonymous_sequence_ambiguity (test_gex_grna_filter.PackedEncodingTest.test_tied_neighbor_reports_anonymous_sequence_ambiguity) ... ok
+test_two_bit_hamming_counts_bases_not_bits (test_gex_grna_filter.PackedEncodingTest.test_two_bit_hamming_counts_bases_not_bits) ... ok
+test_two_substitutions_do_not_pass_seed_candidate_verification (test_gex_grna_filter.PackedEncodingTest.test_two_substitutions_do_not_pass_seed_candidate_verification) ... ok
+test_ambiguity_removal_policy_changes_boolean_not_support (test_gex_grna_filter.RemovalClassifierTest.test_ambiguity_removal_policy_changes_boolean_not_support) ... ok
+test_cross_length_results_do_not_depend_on_config_order (test_gex_grna_filter.RemovalClassifierTest.test_cross_length_results_do_not_depend_on_config_order) ... ok
+test_decision_has_no_biological_identity_fields (test_gex_grna_filter.RemovalClassifierTest.test_decision_has_no_biological_identity_fields) ... ok
+test_exact_and_one_mismatch_reads_are_positive (test_gex_grna_filter.RemovalClassifierTest.test_exact_and_one_mismatch_reads_are_positive) ... ok
+test_fuzzy_tso_boundary_is_used_for_guide_extraction (test_gex_grna_filter.RemovalClassifierTest.test_fuzzy_tso_boundary_is_used_for_guide_extraction) ... ok
+test_no_tso_short_guide_and_tso_cdna_are_negative (test_gex_grna_filter.RemovalClassifierTest.test_no_tso_short_guide_and_tso_cdna_are_negative) ... ok
+test_exact_tso_is_found_at_each_configured_offset (test_gex_grna_filter.TsoDetectionTest.test_exact_tso_is_found_at_each_configured_offset) ... ok
+test_fuzzy_full_tso_supports_substitution_insertion_and_deletion (test_gex_grna_filter.TsoDetectionTest.test_fuzzy_full_tso_supports_substitution_insertion_and_deletion) ... ok
+test_precomputed_myers_matcher_equals_reference (test_gex_grna_filter.TsoDetectionTest.test_precomputed_myers_matcher_equals_reference) ... ok
+test_required_edlib_backend_fails_fast_when_unavailable (test_gex_grna_filter.TsoDetectionTest.test_required_edlib_backend_fails_fast_when_unavailable) ... ok
+test_tso_beyond_configured_offset_is_not_found (test_gex_grna_filter.TsoDetectionTest.test_tso_beyond_configured_offset_is_not_found) ... ok
+test_auto_rejected_output_is_off_when_step1c_is_disabled (test_gex_grna_preprocess_hook.PreprocessHookTest.test_auto_rejected_output_is_off_when_step1c_is_disabled) ... ok
+test_existing_alignment_auto_retains_positive_ids (test_gex_grna_preprocess_hook.PreprocessHookTest.test_existing_alignment_auto_retains_positive_ids) ... ok
+test_fused_compact_route_preserves_trim_and_raw_artifacts (test_gex_grna_preprocess_hook.PreprocessHookTest.test_fused_compact_route_preserves_trim_and_raw_artifacts) ... ok
+test_manifest_reuse_detects_removal_policy_changes (test_gex_grna_preprocess_hook.PreprocessHookTest.test_manifest_reuse_detects_removal_policy_changes) ... ok
+test_positive_pairs_and_statistics_are_finalized_atomically (test_gex_grna_preprocess_hook.PreprocessHookTest.test_positive_pairs_and_statistics_are_finalized_atomically) ... ok
+test_step1c_evidence_does_not_require_raw_rejected_fastqs (test_gex_grna_preprocess_hook.PreprocessHookTest.test_step1c_evidence_does_not_require_raw_rejected_fastqs) ... ok
+test_survivor_trim_routes_full_partial_and_no_tso (test_gex_grna_preprocess_hook.PreprocessHookTest.test_survivor_trim_routes_full_partial_and_no_tso) ... ok
+test_worker_artifacts_use_numeric_fastq_chunk_order (test_gex_grna_preprocess_hook.PreprocessHookTest.test_worker_artifacts_use_numeric_fastq_chunk_order) ... ok
+test_alignment_class_prefers_nh_and_falls_back_to_parse_mapq (test_gex_grna_bam_filter.BamFilterUnitTests.test_alignment_class_prefers_nh_and_falls_back_to_parse_mapq) ... ok
+test_alignment_stats_handoff_rejects_mismatched_source_counts (test_gex_grna_bam_filter.BamFilterUnitTests.test_alignment_stats_handoff_rejects_mismatched_source_counts) ... ok
+test_completed_zero_positive_manifest_is_valid (test_gex_grna_bam_filter.BamFilterUnitTests.test_completed_zero_positive_manifest_is_valid) ... ok
+test_manifest_errors_when_positive_ids_are_unavailable (test_gex_grna_bam_filter.BamFilterUnitTests.test_manifest_errors_when_positive_ids_are_unavailable) ... ok
+test_manifest_generates_ids_from_rejected_fastq (test_gex_grna_bam_filter.BamFilterUnitTests.test_manifest_generates_ids_from_rejected_fastq) ... ok
+test_raw_header_and_splitpipe_qname_normalize_to_same_id (test_gex_grna_bam_filter.BamFilterUnitTests.test_raw_header_and_splitpipe_qname_normalize_to_same_id) ... ok
+test_register_fresh_harmonized_bam_is_idempotent_and_checksummed (test_gex_grna_bam_filter.BamFilterUnitTests.test_register_fresh_harmonized_bam_is_idempotent_and_checksummed) ... ok
+test_source_without_original_header_qnames_is_rejected (test_gex_grna_bam_filter.BamFilterUnitTests.test_source_without_original_header_qnames_is_rejected) ... ok
+test_stream_removes_every_record_and_preserves_survivors (test_gex_grna_bam_filter.BamFilterUnitTests.test_stream_removes_every_record_and_preserves_survivors) ... ok
+test_unsorted_source_is_rejected (test_gex_grna_bam_filter.BamFilterUnitTests.test_unsorted_source_is_rejected) ... ok
+test_cli_writes_new_bam_and_completion_manifest (test_gex_grna_bam_filter.SamtoolsFallbackIntegrationTest.test_cli_writes_new_bam_and_completion_manifest) ... ok
+test_bad_layout_is_not_used_as_ground_truth (test_asymmetric_pilot.PilotFixtureTest.test_bad_layout_is_not_used_as_ground_truth) ... ok
+test_fixed_coordinates_and_synchronized_quality_deletion (test_asymmetric_pilot.PilotFixtureTest.test_fixed_coordinates_and_synchronized_quality_deletion) ... ok
+test_published_fixture_changes_only_expected_ibar2_bases (test_asymmetric_pilot.PilotFixtureTest.test_published_fixture_changes_only_expected_ibar2_bases) ... ok
+
+----------------------------------------------------------------------
+Ran 102 tests in 13.523s
+
+OK
+    L1: 6 reads streamed in 0.0s, 2 groups
+    L1: UMI collapsing done — 0 UMIs collapsed
+    L1: 12 eligible reads from dedicated, gex -> 2 UMI clusters
+    L1: 6 reads streamed in 0.0s, 2 groups
+    L1: UMI collapsing done — 0 UMIs collapsed
+    L1: 12 eligible reads from dedicated, gex -> 2 UMI clusters
+    L1: 6 reads streamed in 0.0s, 2 groups
+    L1: UMI collapsing done — 0 UMIs collapsed
+    L1: 12 eligible reads from dedicated, gex -> 2 UMI clusters
+  [load_guideseq_config] Cross-referencing sc config: /local/scratch/62581448.1.broad/tmp3u_z28vf/base.yaml
+  Grouping by: ['bc_wells', 'grna_name', 'target_gene']
+    L1: 2 eligible reads from dedicated, gex -> 1 UMI clusters
+
+  Joined single-guide design annotations
+
+  Single-guide assignment (threshold=1):
+    Entries above threshold: 1 (of 1)
+    Cells with ≥1 guide:    1
+    Single-guide cells:     1
+    Multi-guide cells:      0
+    Combo types (per cell):
+              singlet: 1
+    Final assignments:      1
+
+  Guide UMI matrix: 1 cells × 1 guides
+    Non-zero entries: 1
+    Sparsity: 0.0000
+    L1: 1 eligible reads from gex -> 1 UMI clusters
+  Grouping by: ['bc_wells', 'grna_name', 'target_gene']
+    L1: 0 eligible reads from gex -> 0 UMI clusters
+  WARNING: no GEX-derived reads passed ordinary Step 3; writing a complete empty Step 1c identity product
+  Saved gex assignment products under: /local/scratch/62581448.1.broad/tmpw4lzncbf/output/gex_grna_identity/grna_assignment
+  Saved gex assignment products under: /local/scratch/62581448.1.broad/tmphlvflfw2/gex_grna_identity/grna_assignment
+    L1: 3 eligible reads from dedicated, gex -> 1 UMI clusters

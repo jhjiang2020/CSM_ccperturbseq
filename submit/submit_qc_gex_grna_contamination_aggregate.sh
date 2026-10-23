@@ -13,7 +13,8 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_TH
 
 SUBMIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "${SUBMIT_DIR}")"
-QC_CONFIG="${CSM_GEX_CONTAM_CONFIG:-${PROJECT_DIR}/qc_config_gex_grna_contamination.yaml}"
+: "${CSM_GEX_CONTAM_CONFIG:?Set an absolute QC YAML path; see examples/qc/README.md}"
+QC_CONFIG="${CSM_GEX_CONTAM_CONFIG}"
 
 _BASE_CONFIG_VALUE=$(grep '^ *base_config:' "${QC_CONFIG}" | head -1 | sed 's/.*: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/' || true)
 _BASE_CONFIG_VALUE="${_BASE_CONFIG_VALUE:-config.yaml}"

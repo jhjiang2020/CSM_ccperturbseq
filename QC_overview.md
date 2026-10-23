@@ -32,12 +32,16 @@ when comparing QC results across runs.
 
 ---
 
+Run-specific QC YAMLs are local files. Start from [the QC examples](examples/qc/README.md),
+update inheritance paths after copying, and pass the config explicitly to the
+worker/CLI. Existing local root QC configs continue to work when passed by path.
+
 ## Q1: Bulk Guide-Seq Library Analysis (`qc_q1_guideseq.py`)
 
 **Objective:**
 Analyze pre-lentiviral bulk plasmid library sequencing to resolve guide unit identities, detect construct defects (dropout, swaps, deletions), and quantify per-guide and per-combo frequencies for downstream fitness analysis (Q4).
 
-> **Note:** Q1 runs **standalone**, independent of the single-cell pipeline. It uses its own config (`qc_config_guideseq.yaml`) and does not require `combined_adata.h5ad`.
+> **Note:** Q1 runs **standalone**, independent of the single-cell pipeline. Copy its standalone config from [`examples/qc/`](examples/qc/README.md); Q1 does not require `combined_adata.h5ad`.
 
 **Methodology:**
 1.  **FastQ Processing & Guide Resolution:** Merges paired-end reads (R1 and R2rc) using the `tRNA_leader` as an anchor.

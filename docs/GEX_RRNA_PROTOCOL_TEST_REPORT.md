@@ -5,9 +5,8 @@
 > installation and commands, use the [quick start](QUICKSTART.md),
 > [configuration reference](CONFIGURATION.md) and [UGER resource guide](UGER_RESOURCES.md).
 > Historical counts/timings are not measurements of the new kallisto backend.
-> The maintained read-recovery and rRNA entry points are
-> `submit/submit_gex_grna_read_recovery.sh` and `submit/submit_gex_rrna_audit.sh`.
-> Earlier one-use wrappers are [archived](../archive/audit_workflows/2026_pilot/README.md).
+> Experiment-specific audit workflows remain in Git history and the local
+> UGER archive; their original commands are provenance, not release entry points.
 > Raw barcode–UMI recovery is a molecule proxy; it is not automatically
 > a gene-resolved expression UMI count under the Step 1a correction/assignment policy.
 

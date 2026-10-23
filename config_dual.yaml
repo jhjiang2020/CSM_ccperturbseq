@@ -49,7 +49,8 @@ paths:
   fastq_dir: "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/fastq"
   # Path to the split-pipe installation
   splitpipe_dir: "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/ParseBiosciences-Pipeline.1.6.4"
-  # STAR genome reference directory (pre-built via split-pipe --mode mkref)
+  # Reference prepared separately with split-pipe --mode mkref: canonical gene
+  # metadata for both backends, plus the alignment index used by STAR.
   genome_dir: "/medpop/rgupta/Jiahao/reference_genome/parse_refdata-gex-GRCh38-2024-A/"
   # Output root directory for all pipeline results
   output_dir: "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output"

@@ -238,30 +238,28 @@ sublibraries, measuring molecule/gene yield, cell-call overlap, guide joins,
 runtime, memory and temporary disk use. These small-fixture checks do not
 establish full-depth resource requirements or biological equivalence to STAR.
 
-The pilot benchmark uses 10 million raw paired reads per C1/C2/T1/T2 library,
-then shares the exact preprocessed survivor FASTQ across all combinations.
-`scripts/benchmark_gex_backends.py` and `submit/submit_kallisto_benchmark.sh`
-cover nine combinations: STAR, kallisto unique genes, and kallisto fractional
-genes, each with `parse`, `directional`, and `none`. Array tasks 1–12 cover the
-Parse-default baseline, 13–24 directional correction, and 25–36 no correction;
-each group contains four libraries per backend/assignment choice.
+The current [v2 Step 1a benchmark](GEX_BENCHMARK_V2.md) uses **50 million raw
+GEX read pairs per C1/C2/T1/T2 sublibrary**. `scripts/benchmark_gex_v2.py` and
+`submit/submit_gex_benchmark_v2.sh` replace the earlier experiment: Parse
+preprocessing runs once, each aligner runs once, and gene-assignment caches feed
+all twelve backend/assignment/UMI configurations. The compute worker is
+`submit/run_gex_benchmark_v2.sh`.
 
-Each core runtime independently measures alignment through DGE, using 16 CPU
-slots, with preprocessing added separately. Reference construction, sampling,
-Step 1b validation and optional clustering/reporting are excluded from that
-timing. Existing prepared reads can be used to add correction choices without
-sampling or filtering again. The report compares matching correction modes
-between backends and also compares correction modes within each backend. It
-retains fractional counts and uses a fixed reference-called cohort as well as
-each arm's own called cells.
+The report separates measured per-stage resources, reconstructed Step 1a cost
+and additional cost when assignment caches exist. It compares all 66
+configuration pairs and estimates signed UMI gains for factor-matched settings
+using the same baseline-called cells. The design guide defines cache validation,
+memory/disk accounting and the distinction between alternative correction
+graphs and a guaranteed relaxation. The completed [measured report](GEX_BENCHMARK_V2_REPORT.md)
+includes all 48 products, assignment-cache definitions, full checksum validation
+and complete scheduler accounting. Reconstructed cache paths include serial STAR
+unique annotation and do not establish production backend speedups.
 
-The completed [pilot report](KALLISTO_PILOT_BENCHMARK_REPORT.md) includes all
-36 library runs, UMI/cell yield, fixed-cohort and expression agreement, cell-call
-overlap, component timings and figures. The validated mature-plus-nascent
-reference built from the Parse GRCh38-2024-A FASTA/GTF is available at
-`output/kallisto_benchmark_10m_20261022/reference`; its `reference.json` records
-the source and runtime checksums. This is a full reference, independent of the
-10-million-pair read sampling.
+The earlier nine-arm, 10M-pair reports and their runners have been superseded
+and removed from the release tree; they remain in Git history and the local
+UGER archive. The validated reference is independent of read depth; use the
+published shared reference or build a matching reference as described in the
+[installation guide](INSTALLATION.md).
 
 The shared STAR-fractional/kallisto molecule counter uses disk-backed, complete-barcode shards across
 the allocated threads. `gex_alignment.count_threads` can cap the worker count
@@ -279,26 +277,10 @@ mature-plus-nascent reference also retains intronic targets. Observed core wall
 times describe this full implementation and reference, rather than an intrinsic
 speed advantage of one aligner.
 
-The optimized counter is checked against saved outputs by
-`scripts/benchmark_kallisto_optimization.py`. Run it on a compute node after
-all benchmark arms complete:
-
-```bash
-python scripts/benchmark_kallisto_optimization.py --config config.yaml \
-  --baseline output/kallisto_benchmark_10m_20261022 \
-  --work-dir output/kallisto_parallel_benchmark_10m_20261022
-```
-
-The comparison requires exact matrix entries (including fractional weights),
-ordered cells/features, cell metadata, byte-identical molecule assignments,
-scientific QC and H5AD raw counts. It also runs and checks the Step 1b handoff.
-Runtime tables distinguish counting from the complete alignment-through-DGE
-stage. The baseline report and outputs remain separate from the new results.
-For the earlier benchmark's documented low-UMI metadata-repair rows, the
-validator also reconstructs the original serial sums from saved assignments
-using round-trip float parsing. It records any prior CSV serialization noise
-separately and requires exact equality against that serial reference; baseline
-files are never rewritten and no tolerance hides count differences.
+The current twelve-policy regression suite checks cached-stage reuse,
+fixed-cohort comparisons and exact count preservation during local-storage
+retiming. See the [benchmark design](GEX_BENCHMARK_V2.md) and
+[measured report](GEX_BENCHMARK_V2_REPORT.md) for validation scope.
 
 Reference implementation:
 [Engreitz GEX workflow](https://github.com/EngreitzLab/telohaec-genomewide-perturb-seq-analysis/blob/280a3747288b8cb30e5102a10c9777e391cf7756/workflows/00_fastq_to_sublibrary_h5ad.smk).

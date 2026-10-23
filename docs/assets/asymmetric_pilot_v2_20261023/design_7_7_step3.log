@@ -1,0 +1,45 @@
+/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/scripts/03_match_grna_ibar.py:1455: UserWarning: [ibar_correction_reduced] Reduced iBAR correction for short or insufficiently separated codewords; UMI correction is independent
+  emit_warnings(design_contract)
+  Loaded reference: 46 entries, 4 target genes, 12 unique gRNA seqs
+
+============================================================
+  Step 3: gRNA + iBAR Matching
+============================================================
+  Alignment backend: edlib (C/bit-parallel)
+  R1 structure: variable_offset + TSO(30) + gRNA([20, 21]) + stem(19) + iBAR(7) + tracr(16)
+  TSO max edit dist: 3
+  Stem max mismatches: 2
+  Max Levenshtein (gRNA): 3
+  Max Levenshtein (iBAR): 2
+  Processes: 2
+  Save failed reads: True
+  Short-read mode: disabled
+
+  Reference lookup sizes (matchers initialize after preflight)...
+    gRNA: 12 unique sequences (12 initial entries)
+    Design: 46 observable units; 46 identify a pair independently
+
+--- Library: POOL ---
+  iBAR preflight [POOL]: ok
+  Matching: 2 worker(s), 100 reads/chunk; at most 4 chunks in flight
+    Chunks 1: 100 reads (4,053/s, 100.0% matched)
+    Chunks 10: 1,000 reads (11,760/s, 100.0% matched)
+    Chunks 20: 1,920 reads (15,305/s, 100.0% matched)
+  Completed in 0.1s (14,540 reads/s)
+  Wrote 1,920 matched reads to /medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/final/validation/design_7_7/grna_matches/POOL_grna_matches.tsv.gz
+  Wrote 0 failed reads to /medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/final/validation/design_7_7/grna_matches/POOL_grna_failed.tsv.gz
+
+  Summary for POOL:
+    Total reads:               1,920
+    Extraction failed:             0
+    Extracted:                 1,920 (100.0%)
+    Exact match:               1,920
+    Fuzzy match:                   0
+    gRNA-only match:               0
+    Total matched:             1,920 (100.0%)
+    gRNA ambiguous:                0
+    gRNA no match:                 0
+
+============================================================
+  Step 3 complete!
+============================================================

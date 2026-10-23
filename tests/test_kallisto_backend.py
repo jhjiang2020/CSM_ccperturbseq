@@ -122,24 +122,6 @@ class FakeParse:
 
 
 class UmiParityTests(unittest.TestCase):
-    def test_benchmark_covers_all_backend_and_correction_combinations(self):
-        from scripts.benchmark_gex_backends import ARMS, arm_options, runtime_config
-        config = {"paths": {}, "gex_decontamination": {"existing_alignment": {},
-                  "step1c": {}, "combine_with_grna_arm": {}}}
-        self.assertEqual(len(ARMS), 9)
-        self.assertEqual(len(set(ARMS)), 9)
-        with tempfile.TemporaryDirectory() as tmp:
-            args = types.SimpleNamespace(work_dir=Path(tmp), config="unused")
-            for arm in ARMS:
-                base, flavor = arm_options(arm)
-                with patch("scripts.benchmark_gex_backends.load_config", return_value=config):
-                    cfg, _ = runtime_config(args, arm)
-                self.assertEqual(cfg["gex_alignment"].get("umi_correction", "parse"), flavor)
-                self.assertEqual(cfg["gex_alignment"]["backend"], "star" if base == "star" else "kallisto")
-                if base != "star":
-                    self.assertEqual(cfg["gex_alignment"]["kallisto"]["gene_assignment"],
-                                     "fractional" if base == "kallisto_fractional" else "unique")
-
     def test_three_correction_flavors_have_distinct_semantics(self):
         counts = {"AAAA": 5, "AAAT": 2, "AATT": 1}
         for flavor, expected in (("parse", 2), ("directional", 1), ("none", 3)):
@@ -516,7 +498,7 @@ class ReferenceBuilderTests(unittest.TestCase):
 
 class BenchmarkMathTests(unittest.TestCase):
     def test_sparse_expression_correlation_matches_dense_including_zeros(self):
-        from scripts.benchmark_gex_report import sparse_cell_correlations
+        from scripts.benchmark_gex_common import sparse_cell_correlations
         first = np.array([[0, 2, 0, 5], [1, 0, 4, 0], [0, 0, 0, 0]])
         second = np.array([[0, 1, 3, 6], [2, 0, 3, 0], [0, 0, 0, 0]])
         actual = sparse_cell_correlations(sparse.csr_matrix(first), sparse.csr_matrix(second))
@@ -524,12 +506,6 @@ class BenchmarkMathTests(unittest.TestCase):
         np.testing.assert_allclose(actual[:2], expected)
         self.assertTrue(np.isnan(actual[2]))
 
-    def test_star_time_includes_index_loading_and_handles_midnight(self):
-        from scripts.benchmark_gex_report import star_alignment_seconds
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "Log.final.out"
-            path.write_text("Started job on | Oct 22 23:59:30\nStarted mapping on | Oct 22 23:59:50\nFinished on | Oct 23 00:00:30\n")
-            self.assertEqual(star_alignment_seconds(path), 60)
 
 
 class ConfigurationTests(unittest.TestCase):

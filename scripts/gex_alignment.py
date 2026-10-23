@@ -371,6 +371,18 @@ def star_reference_identity(config, config_path):
     return hashlib.sha256(json.dumps(artifacts, sort_keys=True).encode()).hexdigest()
 
 
+def write_star_parameters(config, path):
+    """Override Parse's base STAR limit without appending a duplicate option."""
+    options = backend_options(config)
+    if options["backend"] != "star":
+        raise ValueError("STAR parameters require the STAR backend")
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"align_star_args --outFilterMultimapNmax,{options['max_multimaps']}\n"
+                    "star_extra_args --outSAMmultNmax,-1\n")
+    return path
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
@@ -378,11 +390,15 @@ def main():
     parser.add_argument("--field", choices=("backend", "gene_assignment", "max_multimaps", "shared_counter"))
     parser.add_argument("--check-output", action="store_true")
     parser.add_argument("--write-star-policy", metavar="LIBRARY_OUTPUT_DIR")
+    parser.add_argument("--write-star-parameters", metavar="PARAMETER_FILE")
     parser.add_argument("--validate-star-policies", action="store_true")
     parser.add_argument("--write-star-combined-policy", action="store_true")
     args = parser.parse_args()
     config = yaml.safe_load(Path(args.config).read_text())
     options = backend_options(config)
+    if args.write_star_parameters:
+        write_star_parameters(config, resolve_path(args.write_star_parameters, args.config))
+        return
     if args.field:
         print(str(uses_shared_counter(options)).lower() if args.field == "shared_counter" else options[args.field])
         return

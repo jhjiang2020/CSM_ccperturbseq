@@ -41,8 +41,12 @@ import yaml
 
 try:
     from scripts.grna_preflight import check_ibar_reference, preflight_options, print_preflight
+    from scripts.guide_design import DESIGN_COLUMNS, DesignMatcher, compile_design, emit_warnings, enabled, extract_unit
+    from scripts.design_preflight import check_design
 except ModuleNotFoundError:
     from grna_preflight import check_ibar_reference, preflight_options, print_preflight
+    from guide_design import DESIGN_COLUMNS, DesignMatcher, compile_design, emit_warnings, enabled, extract_unit
+    from design_preflight import check_design
 
 
 def resolve_output_root(output_dir, output_namespace=None):
@@ -712,6 +716,9 @@ def _init_worker(config_dict):
     This avoids pickle-serializing the matchers and lookup dicts with every
     chunk, and avoids rebuilding NeighborhoodMatcher ~300 times.
     """
+    _worker_state['design_contract'] = config_dict.get('design_contract')
+    if config_dict.get('design_contract'):
+        _worker_state['design_matcher'] = DesignMatcher(config_dict['design_contract'])
     _worker_state['tso_seq'] = config_dict['tso_seq']
     _worker_state['stem1'] = config_dict['stem1']
     _worker_state['stem2'] = config_dict['stem2']
@@ -736,7 +743,7 @@ def _init_worker(config_dict):
         config_dict['grna_seqs'], config_dict['grna_names'],
         max_dist=config_dict['max_lev_grna']
     )
-    if config_dict['ibar_length'] > 0:
+    if not config_dict.get('design_contract') and config_dict['ibar_length'] > 0:
         _worker_state['ibar_matcher'] = NeighborhoodMatcher(
             config_dict['ibar_seqs'], config_dict['ibar_names'],
             max_dist=config_dict['max_lev_ibar']
@@ -811,6 +818,46 @@ def _resolve_shared_grna(candidate_names, ibar_seq, variant, grna_to_ibars,
     return None, 'unresolved', None, None
 
 
+def _process_design_rows(rows):
+    state = _worker_state
+    contract = state['design_contract']
+    resolver = state['design_matcher']
+    stats = Counter()
+    results, discarded = [], []
+    spacers = list(dict.fromkeys(row['grna_seq'] for row in contract['rows']))
+    for read_id, bc_wells, bc_bci, umi, sequence in rows:
+        sequence = sequence.upper()
+        stats['total_reads'] += 1
+        start, _ = find_tso(sequence, state['tso_seq'], state['tso_max_dist'])
+        observation = extract_unit(sequence, start, contract, state['anchor_max_mm']) if start >= 0 else None
+        if observation is None:
+            stats['extraction_failed'] += 1
+            minimum = min(min(profile['grna_lengths']) + len(profile['stem']) + min(profile['ibar_lengths']) + len(profile['tracr']) for profile in contract['profiles'].values())
+            reason = 'unobserved_truncated' if start >= 0 and len(sequence) - start < minimum else 'extraction_failed_or_ambiguous_boundary'
+            stats[f'failure_{reason}'] += 1
+            if state['save_failed_reads']:
+                discarded.append((read_id, bc_wells, bc_bci, umi, sequence, '', '', reason))
+            continue
+        stats['extracted'] += 1
+        spacer_id, distance, unique = state['grna_matcher'].match(observation['grna_seq'])
+        resolved = resolver.resolve(observation, spacers[spacer_id]) if unique and spacer_id is not None else None
+        if resolved is None:
+            stats['grna_no_match'] += 1
+            if state['save_failed_reads']:
+                discarded.append((read_id, bc_wells, bc_bci, umi, sequence, observation['grna_seq'], observation['ibar_seq'], 'guide_unresolved'))
+            continue
+        match_type = 'exact' if distance == 0 and resolved['ibar_dist'] == 0 else f"fuzzy_g{distance}_i{resolved['ibar_dist']}"
+        stats['exact_match' if match_type == 'exact' else 'fuzzy_match'] += 1
+        stats[f"ibar_status_{resolved['ibar_status']}"] += 1
+        stats[f"structure_{resolved['structure_status']}"] += 1
+        results.append((read_id, bc_wells, bc_bci, umi, resolved['grna_name'], observation['grna_seq'],
+                        observation['ibar_seq'], resolved['target_gene'], distance, resolved['ibar_dist'],
+                        match_type, observation['variant'], observation['grna_length'], resolved['pair_id'],
+                        resolved['target_combo'], resolved['ibar_seq_corrected'], resolved['ibar_decoupled'],
+                        *(resolved[column] for column in DESIGN_COLUMNS)))
+    return results, discarded, stats
+
+
 def _process_rows(rows):
     """Process a list of (read_id, bc_wells, bc_bci, umi, r1_seq) tuples.
 
@@ -818,6 +865,8 @@ def _process_rows(rows):
     Returns (results_list, discarded_list, stats_counter).
     """
     ws = _worker_state
+    if ws.get('design_contract'):
+        return _process_design_rows(rows)
     tso_seq = ws['tso_seq']
     stem1 = ws['stem1']
     stem2 = ws['stem2']
@@ -1238,6 +1287,8 @@ def process_library(barcode_tsv_path, output_path, config_dict, n_processes=1,
     short_read_mode = config_dict.get('short_read_mode', False)
     save_failed = config_dict.get('save_failed_reads', False)
     output_cols = OUTPUT_COLS_SHORT if short_read_mode else OUTPUT_COLS
+    if config_dict.get('design_contract'):
+        output_cols = OUTPUT_COLS + DESIGN_COLUMNS
 
     # Failed reads output path (companion to main output)
     discarded_path = None
@@ -1385,6 +1436,24 @@ def main():
         cfg = yaml.safe_load(f)
 
     ref_df = load_reference(cfg['paths']['grna_reference'])
+    if enabled(cfg):
+        ref_df = ref_df.fillna('')
+    design_contract = compile_design(ref_df, cfg) if enabled(cfg) else None
+    frozen_contract = None
+    if design_contract and cfg.get('guide_design', {}).get('resolved_contract'):
+        frozen_path = Path(cfg['guide_design']['resolved_contract']).expanduser()
+        if not frozen_path.is_absolute():
+            frozen_path = Path(args.config).resolve().parent / frozen_path
+        with frozen_path.open() as handle:
+            frozen_contract = yaml.safe_load(handle)
+        if frozen_contract.get('input_fingerprint', frozen_contract.get('fingerprint')) != design_contract['fingerprint']:
+            raise ValueError('resolved_contract is stale for this reference/settings; rerun the raw pilot')
+        if compile_design(frozen_contract['rows'], cfg)['fingerprint'] != frozen_contract.get('fingerprint'):
+            raise ValueError('resolved_contract content does not match its fingerprint')
+        frozen_contract['capabilities']['infer_missing_partner'] = design_contract['capabilities']['infer_missing_partner']
+    if design_contract:
+        emit_warnings(design_contract)
+        ref_df = pd.DataFrame(design_contract['rows'])
 
     gs = cfg['grna_structure']
     gm = cfg['grna_matching']
@@ -1400,8 +1469,11 @@ def main():
     stem2 = gs.get('fixed_seq_3', None) if not single_guide_mode else None
     tracr1 = gs.get('fixed_seq_4', None)
     tracr2 = gs.get('fixed_seq_5', None) if not single_guide_mode else None
-    grna_lengths = gs['grna_lengths']
-    ibar_length = gs['ibar_length']
+    grna_lengths = gs.get('grna_lengths', design_contract['grna_lengths'] if design_contract else [20, 21])
+    ibar_length = gs.get('ibar_length', 7)
+    if design_contract:
+        grna_lengths = design_contract['grna_lengths']
+        ibar_length = max(length for profile in design_contract['profiles'].values() for length in profile['ibar_lengths'])
     anchor_max_mm = gs['fixed_seq_max_mismatches']
     tso_max_dist = gs.get('tso_max_edit_dist', 3)
 
@@ -1419,7 +1491,7 @@ def main():
     print(f"  Save failed reads: {gm.get('save_failed_reads', False)}")
 
     # Detect short-read mode: single-guide + no iBAR
-    short_read_mode = single_guide_mode and ibar_length == 0
+    short_read_mode = single_guide_mode and ibar_length == 0 and not design_contract
     if short_read_mode:
         print(f"  ⚡ Short-read mode: ENABLED (single-guide, no iBAR)")
         # One-time warning about partial stem mismatch overrides
@@ -1440,7 +1512,8 @@ def main():
     # Build lookups
     combined_lookup = {}
     ref_grna_to_target = {}
-    for _, row in ref_df.iterrows():
+    legacy_reference = ref_df.iloc[:0] if design_contract else ref_df
+    for _, row in legacy_reference.iterrows():
         combined_lookup[(row['grna_seq'], row['ibar_seq'])] = (
             row['grna_name'], row['target_gene'],
             row.get('pair_id', ''), row.get('target_combo', ''),
@@ -1449,18 +1522,18 @@ def main():
 
     # Build per-gRNA iBAR lookup for within-guide matching
     grna_to_ibars = defaultdict(list)
-    for _, row in ref_df.iterrows():
+    for _, row in legacy_reference.iterrows():
         grna_to_ibars[row['grna_name']].append(row['ibar_seq'])
     grna_to_ibars = dict(grna_to_ibars)  # convert for pickle efficiency
 
     # Build grna_name → position mapping (for stem-variant disambiguation)
     grna_name_to_position = {}
-    for _, row in ref_df.iterrows():
+    for _, row in legacy_reference.iterrows():
         grna_name_to_position[row['grna_name']] = row['position']
 
     # Deduplicate gRNA sequences for NeighborhoodMatcher efficiency
     # Map each unique seq to an internal seq_id, and track all grna_names it belongs to.
-    grna_dedup = ref_df.drop_duplicates('grna_name')
+    grna_dedup = ref_df.drop_duplicates('grna_seq') if design_contract else ref_df.drop_duplicates('grna_name')
     grna_seq_to_names = defaultdict(list)
     for _, row in grna_dedup.iterrows():
         grna_seq_to_names[row['grna_seq']].append(row['grna_name'])
@@ -1469,7 +1542,7 @@ def main():
     unique_seq_ids = list(range(len(unique_grna_seqs)))
     seq_id_to_names = {i: names for i, names in zip(unique_seq_ids, grna_seq_to_names.values())}
 
-    ibar_seqs = ref_df['ibar_seq'].unique().tolist()
+    ibar_seqs = [] if design_contract else ref_df['ibar_seq'].unique().tolist()
 
     # Detect shared gRNA sequences
     grna_seq_counts = grna_dedup.groupby('grna_seq')['grna_name'].count()
@@ -1485,11 +1558,18 @@ def main():
         n_affected = ref_df[ref_df['grna_seq'].isin(shared_grna_seqs.index)]['grna_name'].nunique()
         print(f"    ⚠ {n_shared} gRNA sequences shared across positions "
               f"({n_affected} grna_names affected — using iBAR+variant disambiguation)")
-    print(f"    iBAR: {len(ibar_seqs)} unique sequences")
-    print(f"    Per-gRNA iBAR groups: {len(grna_to_ibars)} "
-          f"(avg {sum(len(v) for v in grna_to_ibars.values())/len(grna_to_ibars):.1f} iBARs/gRNA)")
+    if design_contract:
+        capabilities = design_contract['capabilities']
+        print(f"    Design: {capabilities['units_total']} observable units; "
+              f"{capabilities['units_identifying_pair']} identify a pair independently")
+    else:
+        print(f"    iBAR: {len(ibar_seqs)} unique sequences")
+    if grna_to_ibars:
+        print(f"    Per-gRNA iBAR groups: {len(grna_to_ibars)} "
+              f"(avg {sum(len(v) for v in grna_to_ibars.values())/len(grna_to_ibars):.1f} iBARs/gRNA)")
 
     config_dict = {
+        'design_contract': design_contract,
         'tso_seq': tso_seq, 'stem1': stem1, 'stem2': stem2,
         'tracr1': tracr1, 'tracr2': tracr2,
         'grna_lengths': grna_lengths, 'ibar_length': ibar_length,
@@ -1549,11 +1629,24 @@ def main():
                 ))
                 if not fastq_paths:
                     raise FileNotFoundError(f"No gRNA R1 FASTQs found for {lib_name}: {lib['grna_prefix']}")
-            preflight = check_ibar_reference(
-                barcode_tsv, ref_df[['grna_seq', 'ibar_seq']].itertuples(index=False, name=None),
-                config_dict, extract_grna_ibar, sample_reads=preflight_sample_reads,
-                fastq_paths=fastq_paths,
-            )
+            if design_contract:
+                preflight, effective_contract = check_design(
+                    barcode_tsv, design_contract, cfg, find_tso,
+                    sample_reads=preflight_sample_reads, fastq_paths=fastq_paths,
+                )
+                config_dict['design_contract'] = effective_contract
+                if frozen_contract:
+                    for position, orientation in preflight['orientation'].items():
+                        previous = frozen_contract.get('resolved_orientation', {}).get(position, 'as_reference')
+                        if orientation in ('as_reference', 'reverse_complement') and previous in ('as_reference', 'reverse_complement') and previous != orientation:
+                            raise ValueError('Pilot orientation conflicts with the frozen design contract')
+                    config_dict['design_contract'] = frozen_contract
+            else:
+                preflight = check_ibar_reference(
+                    barcode_tsv, ref_df[['grna_seq', 'ibar_seq']].itertuples(index=False, name=None),
+                    config_dict, extract_grna_ibar, sample_reads=preflight_sample_reads,
+                    fastq_paths=fastq_paths,
+                )
             preflight.update(library=lib_name, reference_path=cfg['paths']['grna_reference'],
                              configured_ibar_length=ibar_length)
             print_preflight(preflight, lib_name)
@@ -1563,6 +1656,14 @@ def main():
                 yaml.safe_dump(preflight, handle, sort_keys=False)
         else:
             print(f"  iBAR preflight [{lib_name}]: disabled by config", flush=True)
+            config_dict['design_contract'] = frozen_contract or design_contract
+            if design_contract and not frozen_contract and cfg.get('guide_design', {}).get('ibar_orientation') == 'auto':
+                raise ValueError('ibar_orientation: auto requires enabled preflight')
+        if design_contract:
+            contract_path = Path(output_dir) / 'grna_matches' / f'{lib_name}_design.yaml'
+            contract_path.parent.mkdir(parents=True, exist_ok=True)
+            with contract_path.open('w') as handle:
+                yaml.safe_dump(config_dict['design_contract'], handle, sort_keys=False)
         if args.preflight_only:
             continue
 

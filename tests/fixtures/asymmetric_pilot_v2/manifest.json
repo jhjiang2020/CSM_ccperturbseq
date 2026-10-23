@@ -1,0 +1,199 @@
+{
+  "caveat": "Selected exact-layout reads; artificial cells, 3 UMIs per arm and 2 PCR copies per UMI. Not a biological recombination or sensitivity estimate.",
+  "derived_ibar_lengths": {
+    "pos1": 7,
+    "pos2": 4
+  },
+  "files_sha256": {
+    "asymmetric_R1_001.fastq.gz": "6eb8070cacd6ad470265d70c6c1b7c35832cda618422ed4fba887b4d72214abd",
+    "asymmetric_barcodes.tsv.gz": "1cecc38183adfeea6cbe2b6a80126d76a8a04b53c096ef2676c2f9dcdbe6aa0d",
+    "cell_truth.csv": "5ade97d12039555d26abc980321bf810baf8aa6b05ca54a6985518fe1f59f9d8",
+    "config_template.yaml": "4549b6f46ec12cc07a8e1408f123da105cb0aff4f0124f19a4d7d1159aabd40c",
+    "provenance.tsv.gz": "0e9c0bd6dd25f3103a558e02f8d04641ea9375b96d200bb82f9caa28cff1b9ea",
+    "read_truth.tsv.gz": "8368124cbffb51add31444fdf0bdf9114307f8d37976482877f6b186c7987d7d",
+    "reference_7_4.csv": "fabeeefb09fdd1481c8e92b7ba2f29947072cd83be439339a402bf82a7371ec0",
+    "reference_7_7.csv": "019fdc1d3dd3926e184c04b34c133c836f60aeaacc01fe0649ca2ed692ffcc47",
+    "control_R1_001.fastq.gz": "5c9afef6ca5f4f94a28a61952f9cce55f61d153f67710a137401146a975dfda7",
+    "symmetric_barcodes.tsv.gz": "c6e9d8871ceeddf4cebe447d01d13619a521182d5484e33b717014d5ba14b9d9"
+  },
+  "fixed_tso_offsets": [
+    0,
+    7
+  ],
+  "manipulation": "Delete [ibar_start+4, ibar_start+7) from pos2 sequence and quality; retain all other bases",
+  "original_ibar_length": 7,
+  "pairs_in_reference": 23,
+  "read_count": 1920,
+  "schema_version": 1,
+  "source_config_sha256": "ae4446e59b58fd95a432d35197a2f7574f090024ccd68265d90d9ea4e3d4edf3",
+  "source_reference": "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/references/grna_ibar_reference.csv",
+  "source_reference_sha256": "30c082c8d11a2d34e67bf5f90fb1c0066372411c22a3fa297e5efaf9e43962ac",
+  "source_spacer_lengths": [
+    20,
+    21
+  ],
+  "sources": [
+    {
+      "chosen_pairs": [
+        "ADAMTS7_CEBPB_1",
+        "ADAMTS7_CEBPB_2",
+        "ADAMTS7_CEBPB_3",
+        "ADAMTS7_CEBPB_4",
+        "ADAMTS7_CEBPB_5",
+        "ADAMTS7_CEBPB_6",
+        "ADAMTS7_CEBPB_7",
+        "ADAMTS7_CEBPB_8",
+        "ADAMTS7_CEBPB_9",
+        "ADAMTS7_JUN_1",
+        "ADAMTS7_JUN_2",
+        "ADAMTS7_JUN_3",
+        "ADAMTS7_JUN_4",
+        "ADAMTS7_JUN_5",
+        "ADAMTS7_JUN_6",
+        "ADAMTS7_JUN_7",
+        "ADAMTS7_JUN_8",
+        "ADAMTS7_KLF2_1",
+        "ADAMTS7_KLF2_2",
+        "ADAMTS7_KLF2_3"
+      ],
+      "counters": {
+        "as_reference": 45841,
+        "exact_fixed_layout": 65151,
+        "reverse_complement": 10,
+        "scanned_reads": 100000
+      },
+      "eligible_pairs": 368,
+      "files": [
+        {
+          "path": "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/fastq/23JVL2LT4_5_0470676785_CSMS12_C1_S3_L005_R1_001.fastq.gz",
+          "records_scanned": 100000,
+          "size_bytes": 1040893045
+        }
+      ],
+      "library": "C1",
+      "selected_orientation": "as_reference"
+    },
+    {
+      "chosen_pairs": [
+        "ADAMTS7_CEBPB_1",
+        "ADAMTS7_CEBPB_2",
+        "ADAMTS7_CEBPB_3",
+        "ADAMTS7_CEBPB_4",
+        "ADAMTS7_CEBPB_5",
+        "ADAMTS7_CEBPB_6",
+        "ADAMTS7_CEBPB_7",
+        "ADAMTS7_CEBPB_8",
+        "ADAMTS7_CEBPB_9",
+        "ADAMTS7_JUN_1",
+        "ADAMTS7_JUN_2",
+        "ADAMTS7_JUN_3",
+        "ADAMTS7_JUN_4",
+        "ADAMTS7_JUN_5",
+        "ADAMTS7_JUN_6",
+        "ADAMTS7_JUN_7",
+        "ADAMTS7_JUN_8",
+        "ADAMTS7_KLF2_1",
+        "ADAMTS7_KLF2_3",
+        "ADAMTS7_KLF2_4"
+      ],
+      "counters": {
+        "as_reference": 38598,
+        "exact_fixed_layout": 65811,
+        "reverse_complement": 18,
+        "scanned_reads": 100000
+      },
+      "eligible_pairs": 359,
+      "files": [
+        {
+          "path": "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/fastq/23JVL2LT4_5_0470676785_CSMS12_C2_S4_L005_R1_001.fastq.gz",
+          "records_scanned": 100000,
+          "size_bytes": 2439318869
+        }
+      ],
+      "library": "C2",
+      "selected_orientation": "as_reference"
+    },
+    {
+      "chosen_pairs": [
+        "ADAMTS7_CEBPB_1",
+        "ADAMTS7_CEBPB_2",
+        "ADAMTS7_CEBPB_3",
+        "ADAMTS7_CEBPB_4",
+        "ADAMTS7_CEBPB_5",
+        "ADAMTS7_CEBPB_6",
+        "ADAMTS7_CEBPB_7",
+        "ADAMTS7_CEBPB_8",
+        "ADAMTS7_CEBPB_9",
+        "ADAMTS7_JUN_1",
+        "ADAMTS7_JUN_2",
+        "ADAMTS7_JUN_3",
+        "ADAMTS7_JUN_4",
+        "ADAMTS7_JUN_5",
+        "ADAMTS7_JUN_6",
+        "ADAMTS7_JUN_7",
+        "ADAMTS7_JUN_8",
+        "ADAMTS7_JUN_9",
+        "ADAMTS7_KLF2_1",
+        "ADAMTS7_KLF2_3"
+      ],
+      "counters": {
+        "as_reference": 39923,
+        "exact_fixed_layout": 62639,
+        "reverse_complement": 14,
+        "scanned_reads": 100000
+      },
+      "eligible_pairs": 361,
+      "files": [
+        {
+          "path": "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/fastq/23JVL2LT4_5_0470676785_CSMS12_T1_S5_L005_R1_001.fastq.gz",
+          "records_scanned": 100000,
+          "size_bytes": 1877638609
+        }
+      ],
+      "library": "T1",
+      "selected_orientation": "as_reference"
+    },
+    {
+      "chosen_pairs": [
+        "ADAMTS7_CEBPB_1",
+        "ADAMTS7_CEBPB_2",
+        "ADAMTS7_CEBPB_3",
+        "ADAMTS7_CEBPB_4",
+        "ADAMTS7_CEBPB_5",
+        "ADAMTS7_CEBPB_6",
+        "ADAMTS7_CEBPB_7",
+        "ADAMTS7_CEBPB_8",
+        "ADAMTS7_CEBPB_9",
+        "ADAMTS7_JUN_1",
+        "ADAMTS7_JUN_2",
+        "ADAMTS7_JUN_3",
+        "ADAMTS7_JUN_4",
+        "ADAMTS7_JUN_5",
+        "ADAMTS7_JUN_6",
+        "ADAMTS7_JUN_7",
+        "ADAMTS7_KLF2_1",
+        "ADAMTS7_KLF2_3",
+        "ADAMTS7_KLF2_4",
+        "ADAMTS7_KLF2_5"
+      ],
+      "counters": {
+        "as_reference": 40665,
+        "exact_fixed_layout": 61129,
+        "reverse_complement": 13,
+        "scanned_reads": 100000
+      },
+      "eligible_pairs": 364,
+      "files": [
+        {
+          "path": "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/fastq/23JVL2LT4_5_0470676785_CSMS12_T2_S6_L005_R1_001.fastq.gz",
+          "records_scanned": 100000,
+          "size_bytes": 1500669375
+        }
+      ],
+      "library": "T2",
+      "selected_orientation": "as_reference"
+    }
+  ],
+  "synthetic_cells": 240,
+  "unique_source_records": 480
+}

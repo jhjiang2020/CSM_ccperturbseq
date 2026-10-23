@@ -16,6 +16,7 @@ import argparse
 import os
 import sys
 import re
+import json
 from pathlib import Path
 
 import numpy as np
@@ -32,6 +33,19 @@ from scipy import sparse
 def load_config(config_path):
     with open(config_path) as f:
         return yaml.safe_load(f)
+
+
+def load_design_metadata(output_dir, libraries):
+    metadata = {}
+    for library in libraries:
+        name = library['sublibrary_name']
+        design_path = Path(output_dir) / 'grna_matches' / f'{name}_design.yaml'
+        if design_path.is_file():
+            with design_path.open() as handle:
+                contract = yaml.safe_load(handle)
+            metadata[name] = json.dumps({key: contract.get(key) for key in
+                                         ('schema_version', 'fingerprint', 'input_fingerprint', 'profiles', 'capabilities', 'resolved_orientation')}, sort_keys=True)
+    return metadata
 
 
 def _guide_product_paths(output_dir, source, gex_namespace='gex_grna_identity'):
@@ -404,16 +418,24 @@ def main():
             
             'n_combos': ('n_combos', 'max'),  # same for all rows of a cell
         }
+        for column in ('pair_resolution_basis', 'pos1_ibar_status', 'pos2_ibar_status', 'unpositioned_grna'):
+            if column in assign_df.columns:
+                agg_dict[column] = (column, lambda values: ','.join(sorted(set(values.fillna('').astype(str)))))
+        if 'pair_candidates' in assign_df.columns:
+            agg_dict['pair_candidates'] = ('pair_candidates', lambda values: json.dumps(sorted({candidate for value in values.fillna('[]') for candidate in json.loads(value)})))
+        if 'unpositioned_umi' in assign_df.columns:
+            agg_dict['unpositioned_umi'] = ('unpositioned_umi', 'sum')
         
         cell_grna_info = assign_df.groupby('bc_wells').agg(**agg_dict).reset_index().set_index('bc_wells')
         
-        str_cols = [c for c in cell_grna_info.columns if c not in ['pos1_umi', 'pos2_umi', 'n_combos']]
+        numeric_cols = [column for column in ('pos1_umi', 'pos2_umi', 'n_combos', 'unpositioned_umi') if column in cell_grna_info]
+        str_cols = [c for c in cell_grna_info.columns if c not in numeric_cols]
         for col in str_cols:
             adata.obs[col] = cell_grna_info.reindex(adata.obs.index)[col]
             adata.obs.loc[adata.obs[col] == '', col] = 'unassigned'
             adata.obs[col] = adata.obs[col].fillna('unassigned')
             
-        for col in ['pos1_umi', 'pos2_umi', 'n_combos']:
+        for col in numeric_cols:
             adata.obs[col] = cell_grna_info.reindex(adata.obs.index)[col]
             adata.obs[col] = adata.obs[col].fillna(0).astype(int)
             
@@ -421,6 +443,9 @@ def main():
             lambda x: x.split(',')[0] if x != 'unassigned' else 'unassigned'
         )
         adata.obs['has_grna'] = adata.obs['target_gene'] != 'unassigned'
+        if 'pair_resolution_basis' in assign_df.columns:
+            adata.obs['has_resolved_pair'] = adata.obs['pair_id'].ne('unassigned')
+            adata.obs['has_grna'] = (adata.obs['pos1_umi'] + adata.obs['pos2_umi'] + adata.obs.get('unpositioned_umi', 0)) > 0
         
     else:
         # Single-guide metadata aggregation
@@ -538,7 +563,7 @@ def main():
         'max_lev_dist_grna': cfg['grna_matching']['max_lev_dist'],
         'max_lev_dist_ibar': cfg['grna_matching']['max_lev_dist_ibar'],
         'grna_lengths': cfg['grna_structure']['grna_lengths'],
-        'ibar_length': cfg['grna_structure']['ibar_length'],
+        'ibar_length': cfg['grna_structure'].get('ibar_length', -1),
         'n_libraries': len(cfg['libraries']),
         'library_names': [lib['sublibrary_name'] for lib in cfg['libraries']],
         'guide_call_source': final_guide_source,
@@ -551,6 +576,13 @@ def main():
     lib_dict = lib_info.to_dict()
     adata.uns['library_info'] = {k: {str(ki): vi for ki, vi in v.items()} 
                                  for k, v in lib_dict.items()}
+    try:
+        from scripts.guide_design import enabled
+    except ModuleNotFoundError:
+        from guide_design import enabled
+    design_metadata = load_design_metadata(output_dir, cfg['libraries']) if enabled(cfg) else {}
+    if design_metadata:
+        adata.uns['guide_design'] = design_metadata
 
     # Guide annotation table (maps guide_name → design-level info)
     guide_annot_path = os.path.join(assign_dir, 'guide_annotations.csv')

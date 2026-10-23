@@ -111,6 +111,21 @@ def load_guideseq_config(gs_config_path):
     # Store resolved paths for convenience
     merged['_guideseq_config_path'] = gs_config_path
     merged['_sc_config_path'] = sc_config_path
+    try:
+        from scripts.guide_design import enabled
+    except ModuleNotFoundError:
+        from guide_design import enabled
+    if enabled(merged):
+        settings = merged.setdefault('guideseq', {})
+        settings['guide_design'] = copy.deepcopy(merged.get('guide_design', {}))
+        settings['guide_design']['enabled'] = True
+        frozen = settings['guide_design'].get('resolved_contract')
+        if frozen and not os.path.isabs(frozen):
+            owner = gs_config_path if 'resolved_contract' in gs_cfg.get('guide_design', {}) else sc_config_path or gs_config_path
+            settings['guide_design']['resolved_contract'] = os.path.abspath(os.path.join(os.path.dirname(owner), frozen))
+        positional = merged.get('grna_structure', {}).get('ibar_lengths_by_position')
+        if positional is not None:
+            settings['ibar_lengths_by_position'] = copy.deepcopy(positional)
 
     return merged
 

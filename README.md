@@ -11,6 +11,10 @@ compute environment. Access to the rgupta folder is not required.
 
 ## What changes in v2.0
 
+- **Asymmetric guide/iBAR designs are opt-in.** Per-position iBAR lengths,
+  including no-iBAR designs, preserve ambiguity and expose QC capabilities. See
+  [design configuration](docs/ASYMMETRIC_GUIDE_DESIGNS.md) and the
+  [synthetic validation report](docs/ASYMMETRIC_GUIDE_UGER_VALIDATION.md).
 - **STAR stays the default.** The optional kallisto backend changes transcriptomic
   alignment and counting in Step 1a. Parse split-pipe **1.6.4 remains required**
   for preprocessing, barcode/chemistry definitions, sample handling and cell
@@ -30,9 +34,11 @@ compute environment. Access to the rgupta folder is not required.
   results in barcode order. `gex_alignment.count_threads: 0` uses the allocated cores;
   `1` selects serial counting. Fractional values are retained.
 
-The [parallel counting benchmark](docs/KALLISTO_PARALLEL_BENCHMARK_REPORT.md)
-compares the optimized counter with saved baseline counts and runtime. Counting
-uses allocated cores by default; `gex_alignment.count_threads` can cap it.
+The completed [50M-pair Step 1a benchmark](docs/GEX_BENCHMARK_V2_REPORT.md) covers all twelve
+choices while sharing Parse preprocessing, one alignment per backend and cached
+gene assignment. It measures stage resources, all-pairs agreement and fixed-cell
+UMI gains. It supersedes the earlier 10M-pair benchmarks. Counting uses
+allocated cores by default; `gex_alignment.count_threads` can cap it.
 
 See [counting choices and Parse/Tony presets](docs/GEX_COUNTING.md), the [release notes](RELEASE_NOTES.md), [backend guide](docs/KALLISTO_BACKEND.md)
 and [migration guide](docs/MIGRATING_TO_V2.md). Use a separate output directory

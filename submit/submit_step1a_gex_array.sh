@@ -216,8 +216,9 @@ run_star_quantification() {
 
 STAR_EXTRA_ARGS=()
 if [[ "${GEX_ALIGNMENT_BACKEND}" == "star" ]]; then
-    MAX_MULTIMAPS=$(python3 "${SCRIPTS_DIR}/gex_alignment.py" --config "${CONFIG}" --field max_multimaps)
-    STAR_EXTRA_ARGS=("--star_extra_args=--outFilterMultimapNmax,${MAX_MULTIMAPS},--outSAMmultNmax,-1")
+    STAR_PARAMETERS="${OUTPUT_DIR}/gex_star_parameters/${LIB_NAME}.txt"
+    python3 "${SCRIPTS_DIR}/gex_alignment.py" --config "${CONFIG}" --write-star-parameters "${STAR_PARAMETERS}"
+    STAR_EXTRA_ARGS=(--parfile "${STAR_PARAMETERS}")
 fi
 
 echo "GEX counting: ${GEX_ALIGNMENT_BACKEND} + ${GEX_GENE_ASSIGNMENT} + ${GEX_UMI_CORRECTION}"

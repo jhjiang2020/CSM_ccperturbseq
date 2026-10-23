@@ -23,6 +23,11 @@ import pandas as pd
 import yaml
 from scipy import sparse
 
+try:
+    from scripts.guide_design import assign_cells, compile_design, eligible_assignments, enabled
+except ModuleNotFoundError:
+    from guide_design import assign_cells, compile_design, eligible_assignments, enabled
+
 
 def load_config(config_path):
     with open(config_path) as f:
@@ -82,6 +87,8 @@ def stream_library_umi_dedup(match_path, lib_name, sample_name, sublib_index,
 
     for chunk in pd.read_csv(match_path, sep='\t', usecols=needed_cols,
                              chunksize=chunk_size):
+        if 'guide_unit_id' in group_cols:
+            chunk = chunk.fillna('')
         total_reads += len(chunk)
         chunks_read += 1
 
@@ -263,10 +270,16 @@ def stream_library_umi_dedup_sources(
         for chunk in pd.read_csv(
             match_path, sep='\t', usecols=read_cols, chunksize=chunk_size
         ):
+            if 'guide_unit_id' in group_cols:
+                chunk = chunk.fillna('')
             source_stats[source]['input_reads'] += len(chunk)
             if source in require_resolved_ibar_sources:
                 corrected = chunk['ibar_seq_corrected'].fillna('').astype(str)
-                chunk = chunk[corrected != ''].copy()
+                if 'guide_unit_id' in group_cols:
+                    eligible = chunk['ibar_status'].isin(['present_resolved', 'absent_by_design']) & chunk['structure_status'].eq('concordant')
+                    chunk = chunk[eligible].copy()
+                else:
+                    chunk = chunk[corrected != ''].copy()
             source_stats[source]['eligible_reads'] += len(chunk)
             if len(chunk) == 0:
                 continue
@@ -614,6 +627,8 @@ def build_guide_umi_matrix(deduped_df, min_umi_threshold=0):
 
 def assign_dual_guide_pairs(deduped_df, ref_df, min_umi_threshold=5, ibar_col='ibar_seq_corrected'):
     """Assign dual-guide pairs to cells, supporting iBAR-based inference for half-detected pairs."""
+    if 'guide_unit_id' in deduped_df.columns:
+        return assign_cells(deduped_df, ref_df, min_umi_threshold)
     print(f"\n  Dual-guide pair assignment (pair UMI threshold={min_umi_threshold}):")
     
     # 1. Pre-build lookup for inference
@@ -787,6 +802,11 @@ def compute_qc_stats(lib_stats_all, deduped_df, assignment_df, guide_matrix,
         lib_stats_all: dict of {lib_name: {total_reads, unique_cells, ...}}
     """
     stats = {}
+    design_aware = 'pair_resolution_basis' in assignment_df.columns
+    if design_aware:
+        stats['guide_observation_records'] = len(assignment_df)
+        stats['unresolved_observation_records'] = int(assignment_df['pair_id'].fillna('').eq('').sum())
+        assignment_df = eligible_assignments(assignment_df)
 
     # Per-library stats from streaming summaries
     total_reads = 0
@@ -855,9 +875,11 @@ def compute_qc_stats(lib_stats_all, deduped_df, assignment_df, guide_matrix,
             stats[f'pair_assignments_{dtype}'] = count
 
         pairs_per_cell = assignment_df.groupby('bc_wells')['pair_id'].nunique()
-        stats['mean_pairs_per_cell'] = float(pairs_per_cell.mean())
-        stats['median_pairs_per_cell'] = float(pairs_per_cell.median())
-        stats['max_pairs_per_cell'] = int(pairs_per_cell.max())
+        if design_aware:
+            pairs_per_cell = pairs_per_cell.reindex(deduped_df['bc_wells'].unique(), fill_value=0)
+        stats['mean_pairs_per_cell'] = float(pairs_per_cell.mean()) if len(pairs_per_cell) else 0.0
+        stats['median_pairs_per_cell'] = float(pairs_per_cell.median()) if len(pairs_per_cell) else 0.0
+        stats['max_pairs_per_cell'] = int(pairs_per_cell.max()) if len(pairs_per_cell) else 0
 
         # Target combo counts (assignment-level is correct here)
         for tc in assignment_df['target_combo'].unique():
@@ -1251,6 +1273,12 @@ def plot_median_reads_per_umi_per_cell(deduped_df, save_path=None):
 def _determine_group_cols(match_path, dedup_ibar):
     """Determine grouping columns by peeking at the header of a match file."""
     header_cols = pd.read_csv(match_path, sep='\t', nrows=0).columns.tolist()
+    if 'guide_unit_id' in header_cols:
+        columns = ['bc_wells', 'grna_name', 'target_gene', 'guide_unit_id', 'position',
+                   'ibar_seq_corrected', 'ibar_seq_unresolved', 'ibar_status',
+                   'pair_candidates', 'pair_candidate_count', 'structure_status',
+                   'guide_design_fingerprint', 'resolution_status', 'legacy_model_eligible']
+        return columns
     if dedup_ibar:
         if 'ibar_seq_corrected' in header_cols:
             return ['bc_wells', 'grna_name', 'target_gene', 'ibar_seq_corrected', 'ibar_seq_unresolved']
@@ -1321,6 +1349,25 @@ def _source_mode_tasks(cfg, output_dir, source_mode, gex_namespace):
 def _annotate_and_assign(deduped_df, ref_df, available_cols, group_cols, ga):
     """Apply the unchanged design annotation and guide-calling logic."""
     dual_mode = ga.get('dual_guide_counting_mode', False)
+    if 'guide_unit_id' in deduped_df.columns:
+        if ref_df is None:
+            raise ValueError('Design-aware assignment requires a reference')
+        import json
+        deduped_df = deduped_df.copy()
+        candidate_lists = deduped_df['pair_candidates'].map(json.loads)
+        deduped_df['pair_id'] = candidate_lists.map(lambda candidates: candidates[0] if len(candidates) == 1 else '')
+        metadata = ref_df.drop_duplicates('pair_id').set_index('pair_id') if 'pair_id' in ref_df.columns else None
+        if metadata is not None:
+            for column in ('target_combo', 'target_version', 'gi_pair', 'gi_version'):
+                if column in metadata:
+                    deduped_df[column] = deduped_df['pair_id'].map(metadata[column]).fillna('')
+        if dual_mode:
+            assignment = assign_cells(deduped_df, ref_df, ga.get('min_umi_threshold', 5),
+                                      infer_missing_partner=ga.get('infer_missing_partner', 'auto') is not False)
+        else:
+            assignment = assign_single_guides(deduped_df, ga.get('min_umi_threshold', 5),
+                                               ga.get('multiplet_strategy', 'all'), ga.get('min_dominance_fraction', 0.0))
+        return deduped_df, assignment
     if ref_df is not None:
         if dual_mode:
             ibar_cols = [
@@ -1396,6 +1443,25 @@ def _stream_assignment_product(
     """Build one dedicated, GEX-only, or union assignment product."""
     tasks = _source_mode_tasks(cfg, output_dir, source_mode, gex_namespace)
     group_cols = _determine_group_cols(tasks[0][0][0][1], dedup_ibar)
+    if not enabled(cfg) and 'guide_unit_id' in group_cols:
+        raise ValueError('Design-aware match outputs require guide_design.enabled; use a separate output directory for legacy runs')
+    if enabled(cfg):
+        expected_contract = compile_design(ref_df, cfg)
+        effective_fingerprints = set()
+        for paths, lib_name, _, _ in tasks:
+            for _, match_path in paths:
+                contract_path = Path(match_path).parent / f'{lib_name}_design.yaml'
+                if not contract_path.is_file():
+                    raise ValueError(f'Missing resolved design: {contract_path}; rerun Step 3')
+                with contract_path.open() as handle:
+                    saved = yaml.safe_load(handle)
+                if saved.get('input_fingerprint', saved['fingerprint']) != expected_contract['fingerprint']:
+                    raise ValueError('Reference or guide settings changed since Step 3; rerun matching')
+                effective_fingerprints.add(saved['fingerprint'])
+        if len(effective_fingerprints) != 1:
+            raise ValueError('Libraries/evidence sources resolved incompatible guide designs; inspect orientation pilots')
+        if 'guide_unit_id' not in group_cols:
+            raise ValueError('guide_design.enabled requires design-aware Step 3 outputs')
     print(f"  Grouping by: {group_cols}")
 
     all_deduped = []
@@ -1488,6 +1554,8 @@ def _stream_assignment_product(
             f"No eligible {source_mode} guide evidence remained after filtering"
         )
     deduped_df = pd.concat(nonempty, ignore_index=True)
+    if enabled(cfg) and set(deduped_df['guide_design_fingerprint']) != effective_fingerprints:
+        raise ValueError('Match evidence does not match its resolved guide design')
     deduped_df, assignment_df = _annotate_and_assign(
         deduped_df, ref_df, available_cols, group_cols, ga
     )
@@ -1669,7 +1737,7 @@ def main():
 
     # Auto-override: disable iBAR dedup when ibar_length == 0
     ibar_length = cfg.get('grna_structure', {}).get('ibar_length', 7)
-    if ibar_length == 0 and dedup_ibar:
+    if ibar_length == 0 and dedup_ibar and not enabled(cfg):
         print("  NOTE: ibar_length=0 in config → overriding umi_dedup_ibar to False")
         dedup_ibar = False
 
@@ -1688,9 +1756,11 @@ def main():
     ref_path = cfg['paths']['grna_reference']
     ref_df = None
     annotation_cols = ['grna_name', 'position', 'stem_variant', 'pair_id',
-                       'target_combo', 'target_version', 'gi_pair', 'gi_version']
+                       'target_combo', 'target_version', 'gi_pair', 'gi_version', 'guide_unit_id']
     if os.path.exists(ref_path):
-        ref_df = pd.read_csv(ref_path)
+        ref_df = pd.read_csv(ref_path).fillna('')
+        if enabled(cfg):
+            ref_df = pd.DataFrame(compile_design(ref_df, cfg)['rows'])
         available_cols = [c for c in annotation_cols if c in ref_df.columns]
         if available_cols:
             print(f"\n  Loaded reference annotations: {available_cols}")

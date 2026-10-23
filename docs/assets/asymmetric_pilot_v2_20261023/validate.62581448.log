@@ -1,0 +1,69 @@
+job=62581448 host=uger-rh8-d004.broadinstitute.org python=/medpop/rgupta/Jiahao/conda/envs/splitpipe/bin/python env=/medpop/rgupta/Jiahao/conda/envs/splitpipe mode=validate
+Cpus_allowed_list:	0-1
+{
+  "legacy_7_7": {
+    "reads": 1920,
+    "cells": 240,
+    "umi_count": 960,
+    "extraction_errors": 0,
+    "count_errors": 0,
+    "candidate_errors": 0,
+    "detection_status_counts": {
+      "inferred": 160,
+      "complete": 80
+    },
+    "pilot_status": "ok",
+    "observed_ibar_lengths": null,
+    "orientation": null
+  },
+  "design_7_7": {
+    "reads": 1920,
+    "cells": 240,
+    "umi_count": 960,
+    "extraction_errors": 0,
+    "count_errors": 0,
+    "candidate_errors": 0,
+    "detection_status_counts": {
+      "inferred": 160,
+      "complete": 80
+    },
+    "pilot_status": "ok",
+    "observed_ibar_lengths": {
+      "1": {
+        "7": 960
+      },
+      "2": {
+        "7": 960
+      }
+    },
+    "orientation": {
+      "1": "as_reference",
+      "2": "as_reference"
+    }
+  },
+  "design_7_4": {
+    "reads": 1920,
+    "cells": 240,
+    "umi_count": 960,
+    "extraction_errors": 0,
+    "count_errors": 0,
+    "candidate_errors": 0,
+    "detection_status_counts": {
+      "inferred": 160,
+      "complete": 80
+    },
+    "pilot_status": "ok",
+    "observed_ibar_lengths": {
+      "1": {
+        "7": 960
+      },
+      "2": {
+        "4": 960
+      }
+    },
+    "orientation": {
+      "1": "as_reference",
+      "2": "as_reference"
+    }
+  }
+}

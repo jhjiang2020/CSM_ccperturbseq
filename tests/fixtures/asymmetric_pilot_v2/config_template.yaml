@@ -1,0 +1,39 @@
+grna_structure:
+  single_guide_mode: false
+  fixed_seq_1: AAGCAGTGGTATCAACGCAGAGTGAATGGG
+  fixed_seq_2: GTTTGAGAGCTAAGCAGGA
+  fixed_seq_3: GTTTCAGAGCTATGCTGGA
+  fixed_seq_4: GACTGCTTAGCAAGTT
+  fixed_seq_5: AACAGCATAGCAAGTT
+  grna_lengths:
+  - 20
+  - 21
+  ibar_length: 7
+  tso_max_edit_dist: 3
+  fixed_seq_max_mismatches: 2
+  ibar_lengths_by_position: auto
+grna_matching:
+  max_lev_dist: 3
+  max_lev_dist_ibar: 2
+  save_failed_reads: true
+  preflight:
+    enabled: true
+    sample_reads: 10000
+guide_assignment:
+  dual_guide_counting_mode: true
+  min_umi_threshold: 1
+  multiplet_strategy: all
+  min_dominance_fraction: 0.0
+  umi_dedup_ibar: true
+  max_umi_edits: 1
+  min_reads_per_umi: 1
+  compute_saturation_curve: false
+guide_design:
+  enabled: true
+  ibar_orientation: auto
+barcode_extraction:
+  n_processes: 1
+libraries:
+- sublibrary_name: POOL
+  grna_prefix: asymmetric
+  sample_name: Synthetic

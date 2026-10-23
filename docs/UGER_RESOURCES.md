@@ -109,10 +109,16 @@ scheduler's actual CPU reservation and use the [worker recipe](RUNNING.md#anothe
 
 ## Reference and standalone QC workers
 
+The `kallisto_benchmark` profile now controls the cached twelve-choice v2 GEX
+experiment. Launch it with `submit/submit_gex_benchmark_v2.sh`; see the
+[50M-pair benchmark design](GEX_BENCHMARK_V2.md) and the completed
+[measured CPU, memory and disk report](GEX_BENCHMARK_V2_REPORT.md). It requests 128 GiB total by
+default (16 × 8 GiB), with two concurrent array tasks unless overridden.
+
 | Profile | Slots | GB/slot | Hours | Worker |
 | --- | ---: | ---: | ---: | --- |
 | `kallisto_reference` | 8 | 8 | 12 | `submit/submit_kallisto_reference.sh` |
-| `kallisto_benchmark` | 16 | 8 | 12 | `submit/submit_kallisto_benchmark.sh` |
+| `kallisto_benchmark` | 16 | 8 | 12 | `submit/run_gex_benchmark_v2.sh` |
 | `shared_kallisto_environment` | 4 | 8 | 3 | `submit/submit_shared_kallisto_environment.sh` |
 | `q1` | 8 | 4 | 12 | `submit/submit_q1_guideseq.sh` |
 | `gex_contamination` | 8 | 8 | 48 | Raw GEX carry-over QC array |
@@ -148,59 +154,16 @@ from the script filename. It accepts `--record /absolute/file.jsonl` through the
 Python resolver CLI; otherwise the generic shell launcher records under the
 resource config's `paths.log_dir`, or a sibling `logs/` directory.
 
-## Maintained multi-stage QC/audit drivers
+## Standalone QC driver
 
-These drivers now call the same resolver and require a Python with PyYAML for
-submission. Set `CSM_UGER_PYTHON=/path/to/python` when it is not on your PATH.
-Use their existing assay/input arguments and environment variables unchanged.
+`submit/submit_qc_gex_grna_contamination_pipeline.sh` uses the same resolver
+with profiles `gex_contamination`, `gex_contamination_alignment` and
+`gex_contamination_aggregate`. Pass `--config /absolute/path/to/my_qc.yaml`;
+see the [QC examples](../examples/qc/README.md). Default raw/alignment array
+concurrency is two. Set `CSM_UGER_PYTHON` when Python with PyYAML is not on PATH.
 
-| Driver in `submit/` | Profiles | Default slots × GB/slot, hours; array cap |
-| --- | --- | --- |
-| `submit_gex_bcl2fastq.sh` | `gex_demux_probe`, `gex_demux_run`, `gex_demux_qc` | 4×4, 0.5 h; 8×4, 4 h; 2×8, 1 h |
-| `submit_gex_umi_saturation.sh` | `gex_umi_count`, `gex_umi_control`, `gex_umi_compare` | 2×16, 12 h (count cap 6); 2×16, 12 h; 2×8, 2 h |
-| `submit_gex_grna_carryover.sh` | `gex_carryover_scan`, `gex_carryover_compare` | 2×8, 12 h (scan cap 6); 2×8, 2 h |
-| `submit_gex_rrna_protocol_test.sh` | `gex_rrna_compare`, plus the external rRNA profiles below | 2×8, 2 h for comparison |
-| `submit_gex_rrna_audit.sh` (pilot) | `rrna_reference`, `rrna_full`, `rrna_aggregate`, `rrna_report` | 4×8, 4 h; 16×8, 168 h (cap 4); 2×12, 8 h; 1×8, 1 h |
-| `submit_gex_rrna_audit.sh` (manifest) | `rrna_external_validate`, `rrna_external_preflight`, `rrna_external_preaggregate`, `rrna_external_full`, `rrna_external_finalize` | 1×8, 1 h; 4×4, 48 h (cap 4); 1×4, 2 h; 16×8, 168 h; 1×8, 4 h |
-| `submit_gex_grna_read_recovery.sh` | `read_recovery_prepare`, `read_recovery_depth`, `read_recovery_rawguide`, `read_recovery_finalize` | 1×16, 4 h; 4×8, 48 h (cap 4); 1×8, 24 h (cap 4); 1×16, 4 h |
-| `submit_qc_gex_grna_contamination_pipeline.sh` | `gex_contamination`, `gex_contamination_alignment`, `gex_contamination_aggregate` | As above; default raw/alignment array caps 2 |
-
-Add profile overrides under `uger:` in the driver's input YAML, or choose a
-separate resource YAML through `CSM_RESOURCE_CONFIG`:
-
-```yaml
-uger:
-  queue: broad
-  gex_umi_count:
-    memory_per_slot_gb: 24
-    runtime_hours: 24
-    max_concurrent: 2
-  rrna_full:
-    slots: 12
-    memory_per_slot_gb: 10
-    max_concurrent: 2
-```
-
-```bash
-export CSM_RESOURCE_CONFIG="$(realpath my_resources.yaml)"
-export CSM_UGER_PYTHON=/path/to/production/bin/python
-bash submit/submit_gex_umi_saturation.sh submit
-```
-
-A separate resource YAML replaces the resource source; it does not change the
-assay config, FASTQs or environment selected for compute workers. Small QC files
-with `base_config` or a readable optional `sc_config` inherit `uger:` from that file; local profile
-fields override inherited fields. Relative references are resolved beside the
-QC YAML, and cycles are rejected. Protocol sub-drivers receive the separate
-resource-config selection as well.
-
-Existing contamination-QC `--workers`, `--max-concurrent`,
-`--alignment-max-concurrent` and `alignment_benchmark.star_threads`,
-`star_memory`, `star_runtime` remain supported. They supply fallback requests;
-an explicit `uger:` override takes precedence. Without `uger:`, their previous
-behavior is retained. The QC dry run prints resolved requests, not merely the
-fallback flags. Archived one-use scripts are historical and do not participate
-in this interface; use the maintained drivers.
+Older experiment-specific resource profiles remain readable for saved YAMLs;
+their one-use drivers are local archive material, not release entry points.
 
 ## Inspect requests and tune a rerun
 
@@ -216,8 +179,12 @@ The resolver only reads small config/text files. Submission bookkeeping uses a
 30-second timeout when GNU `timeout` is available, and each `qsub` call has a
 25-second timeout. It imports no numerical libraries or assay data.
 
-Successful submissions append under a file lock to `uger_submissions.jsonl` in the configured log
-folder (multi-stage QC drivers use their own `LOG_DIR`). Each entry records UTC
+Successful submissions first save an atomic per-job record under
+`uger_submissions.records/<job-id>.json`, then append under a file lock to
+`uger_submissions.jsonl` in the configured log folder (multi-stage QC drivers use
+their own `LOG_DIR`). If shared-filesystem locking or the JSONL append fails,
+the resolver returns the submitted job ID with a warning and preserves the
+per-job record. Check that record before retrying a submission. Each entry records UTC
 time, exact job ID, command arguments and resolved resource values including
 total GB. Main-workflow dependencies use the exact returned job IDs so two runs
 do not share holds just because their job names match. A scheduler hold still

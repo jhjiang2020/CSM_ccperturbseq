@@ -165,7 +165,9 @@ reuse -q UGER || true
 command -v qsub
 ```
 
-Configuration is in `qc_config_gex_grna_contamination.yaml`. Every production
+Copy `examples/qc/qc_config_gex_grna_contamination.example.yaml` to a run
+configuration and set `base_config` to your pipeline YAML. Pass that file
+explicitly through `--config` (launcher) or `CSM_GEX_CONTAM_CONFIG` (worker). Every production
 launcher activates `environment.conda_env` from the base config, either the
 named `splitpipe` environment or the absolute shared `splitpipe-share` prefix;
 it never activates `csm_analysis`. The optional

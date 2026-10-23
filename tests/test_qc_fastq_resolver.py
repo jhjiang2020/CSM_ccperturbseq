@@ -26,7 +26,7 @@ class QcFastqResolverTest(unittest.TestCase):
     def test_qc_launcher_can_gate_alignment_and_aggregate_without_rescan(self):
         launcher = ROOT / "submit/submit_qc_gex_grna_contamination_pipeline.sh"
         alignment = subprocess.run(
-            ["bash", str(launcher), "--mode", "alignment", "--dry-run"],
+            ["bash", str(launcher), "--config", str(ROOT / "examples/qc/qc_config_gex_grna_contamination.example.yaml"), "--mode", "alignment", "--dry-run"],
             text=True,
             capture_output=True,
             check=True,
@@ -34,7 +34,7 @@ class QcFastqResolverTest(unittest.TestCase):
         self.assertIn("Alignment command:", alignment)
         self.assertNotIn("Array command:", alignment)
         aggregate = subprocess.run(
-            ["bash", str(launcher), "--mode", "aggregate", "--dry-run"],
+            ["bash", str(launcher), "--config", str(ROOT / "examples/qc/qc_config_gex_grna_contamination.example.yaml"), "--mode", "aggregate", "--dry-run"],
             text=True,
             capture_output=True,
             check=True,
@@ -44,7 +44,7 @@ class QcFastqResolverTest(unittest.TestCase):
         self.assertNotIn("Array command:", aggregate)
 
     def test_production_qc_aggregates_one_four_and_twelve_libraries(self):
-        base = load_merged_config(str(ROOT / "qc_config_gex_grna_contamination.yaml"))
+        base = load_merged_config(str(ROOT / "examples/qc/qc_config_gex_grna_contamination.example.yaml"))
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             cases = {

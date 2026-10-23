@@ -9,11 +9,9 @@ __pycache__/
 fastq/
 output/
 output_v1_4_bamtest/
-ParseBiosciences-Pipeline.1.6.4/
+/ParseBiosciences-Pipeline.1.6.4
 scripts/__pycache__/
 tmp/
-archive/*
-!archive/audit_workflows/
-archive/audit_workflows/*
-!archive/audit_workflows/2026_pilot/
-!archive/audit_workflows/2026_pilot/**
+# Superseded workflows, snapshots and run-specific configuration stay local.
+/archive/
+/qc_config*.yaml

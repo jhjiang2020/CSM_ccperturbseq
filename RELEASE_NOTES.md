@@ -1,6 +1,27 @@
 # Release Notes
 
-## Step 1a assignment harmonization (2026-10-23)
+## v2.0 (2026-10-23)
+
+### Asymmetric guide designs
+
+- Added an opt-in design-aware gRNA arm with per-position iBAR lengths,
+  including 1-nt and intentionally absent iBARs, and reference-derived spacer
+  lengths. Existing configurations retain the legacy symmetric path.
+- Step 0 emits design capabilities and conservative correction policies;
+  bounded pilots independently assess boundaries, orientation and scaffold
+  agreement. Validated orientation changes can be frozen for all sources.
+- Matching preserves candidate construct sets. Assignment resolves only
+  supported identities and allocates each observed unit once. UMI correction
+  remains independent of iBAR correction, including for no-iBAR designs.
+- Added linked design compatibility QC and explicit unavailable-model states,
+  source-merge/fingerprint validation, AnnData metadata and validation tests.
+- See [asymmetric guide designs](docs/ASYMMETRIC_GUIDE_DESIGNS.md) for activation,
+  capabilities, limitations and migration.
+- Added a small pooled pilot-derived 7/4-nt fixture and
+  [production UGER validation report](docs/ASYMMETRIC_GUIDE_UGER_VALIDATION.md),
+  including symmetric legacy agreement and asymmetric/no-iBAR regressions.
+
+### Step 1a assignment harmonization
 
 - Added fractional gene assignment for STAR from complete name-sorted BAMs,
   with NH/primary checks and Parse stranded gene-span annotation.
@@ -16,7 +37,7 @@
   + none, unstranded; this is not a claim of identical end-to-end counts.
 
 
-## v2.0 — Native kallisto and tunable GEX UMI correction (2026-10-22)
+### Native kallisto and tunable GEX UMI correction
 
 All maintained UGER stages now share optional YAML resources: CPU slots, memory
 per slot, wall time, array concurrency, queue/OS/PE/account and site complexes.
@@ -64,15 +85,17 @@ for the pinned versions and completion manifest. The targeted UGER regression
 suite for resources, report templates and backend fixtures passed 144 tests and
 49 subtests; shell/YAML examples and local documentation links were checked.
 
-The [original four-library benchmark](docs/KALLISTO_PILOT_BENCHMARK_REPORT.md)
-is the serial-counter baseline. The completed
-[optimized benchmark](docs/KALLISTO_PARALLEL_BENCHMARK_REPORT.md) repeats all
-36 backend/UMI-mode cases at 10 million pairs per library with 16 cores.
-Kallisto counting takes 42–47 seconds per library, and preprocessing through
-DGE output takes 6.59–7.16 minutes versus 8.37–8.70 minutes for STAR (medians
-across four libraries; shared preprocessing is reused). All 96 tested count
-products match their serial reference exactly. See
-[the backend guide](docs/KALLISTO_BACKEND.md) for validation and output semantics.
+The current [50M-pair Step 1a experiment](docs/GEX_BENCHMARK_V2.md) covers all
+twelve configurations using shared alignment/assignment caches. The completed
+[measured report](docs/GEX_BENCHMARK_V2_REPORT.md) covers all 48 products, stage
+resources, 264 agreement comparisons, 72 fixed-cohort UMI-change comparisons and
+complete scheduler accounting. It supersedes the earlier nine-arm 10M-pair
+reports, assets and runners, which remain in Git history and the ignored local
+UGER archive.
+
+Run-specific root `qc_config*.yaml` files and single-use audit wrappers are no
+longer distributed. Reusable QC schemas live under `examples/qc/`; GEX QC
+launchers require an explicit configuration.
 
 
 This file records user-visible behavior changes. New users should begin with

@@ -21,6 +21,7 @@ own storage and Parse-provided software.
 | [GEX decontamination](GEX_DECONTAMINATION_V1_4.md) | Removal before either backend, optional Step 1c, source union and historical STAR BAM reuse. The filename preserves old links; the guide covers current behavior. |
 | [Sequencing scenarios](ILLUMINA_100_CYCLE_SEQUENCING.md) | Read reach, short-GEX versus short-guide decisions and compatible identity models. |
 | [Preflight and scaling](SCALABILITY_AND_PREFLIGHT.md) | iBAR diagnostics, CPU/memory controls and stage-specific constraints. |
+| [Asymmetric guide designs](ASYMMETRIC_GUIDE_DESIGNS.md) | Optional position-specific iBARs, no-iBAR constructs, design capabilities and validated pilots. |
 | [Migration](MIGRATING_TO_V2.md) | Preserve old results, choose new namespaces and rebuild affected stages. |
 | [Release notes](../RELEASE_NOTES.md) | Versioned changes; historical entries describe their original releases. |
 
@@ -45,28 +46,21 @@ when the production backend is changed.
 
 | Report | Interpretation |
 | --- | --- |
-| [Four-library kallisto baseline](KALLISTO_PILOT_BENCHMARK_REPORT.md) | Matched 10-million-pair comparison of STAR and the earlier **serial** native counter, including three UMI modes and unique/fractional genes. Runtime claims do not describe the optimized parallel counter. |
-| [Optimized four-library kallisto benchmark](KALLISTO_PARALLEL_BENCHMARK_REPORT.md) | Completed rerun of all 36 cases at 16 cores, counting/runtime comparisons and exact serial-reference checks for 96 count products. |
+| [Asymmetric gRNA UGER validation](ASYMMETRIC_GUIDE_UGER_VALIDATION.md) | Small pooled pilot-derived 7/4-nt fixture, production-environment matching/count conservation, symmetric legacy agreement and regression tests. |
+| [Measured v2 Step 1a benchmark](GEX_BENCHMARK_V2_REPORT.md) · [design](GEX_BENCHMARK_V2.md) | Completed 50M GEX pairs per pilot sublibrary: all 48 products, measured stage runtime/resources, 264 agreement comparisons and 72 fixed-cohort UMI-change comparisons; full checksum validation and scheduler accounting. |
 | [Four-sublibrary technical audit](PILOT_4_SUBLIB_TECHNICAL_AUDIT.md) | Historical pilot processing/count validation and biological/QC context. |
 | [GEX guide carry-over](GEX_GRNA_CARRYOVER_REPORT.md) | Recorded carry-over measurement for its specified input cohort. |
 | [C2 misalignment case study](C2_GEX_GRNA_MISALIGNMENT_CASE_STUDY.md) | Controlled STAR evidence for short guide-derived false expression; retains its original experiment. |
 | [Full rRNA/barcode audit](PILOT_4_SUBLIB_RRNA_BARCODE_REPORT.md) | Full pilot raw-read audit with its own barcode/rRNA definitions. |
-| [100k-read rRNA/barcode smoke report](PILOT_100K_RRNA_BARCODE_SMOKE_REPORT.md) | Preliminary diagnostic; use the full audit for final pilot estimates. |
 | [rRNA protocol test](GEX_RRNA_PROTOCOL_TEST_REPORT.md) | Recorded protocol comparison, not a v2.0 backend comparison. |
 | [Comparative rRNA audit](RRNA_AUDIT_COMPARATIVE_REPORT_TELOHAEC_THP1.md) | Cohort-specific rRNA/barcode comparison and provenance. |
 | [UMI recovery/saturation](GEX_UMI_SATURATION_REPORT.md) | Barcode–UMI recovery/rarefaction; these molecule proxies are not automatically gene-resolved Step 1a UMIs. |
 
-The optimized four-library benchmark is complete and published separately from
-the serial baseline. Use its full rerun timings when assessing the current
-counter. [The backend guide](KALLISTO_BACKEND.md) describes the regression
-procedure and components measured.
+The current 50M-pair report replaces both earlier 10M-pair benchmark reports.
+Superseded reports, assets and one-use audit tools remain in Git history and
+an ignored local UGER archive. Historical full-audit evidence above remains
+available with its measured definitions. The preliminary 100k-read rRNA smoke
+report has been retired in favor of the full audit.
 
-Historical figures and evidence under `docs/assets/` are kept with their
-reports. Older audit-only tools may live under
-[the pilot archive](../archive/audit_workflows/2026_pilot/README.md); use the
-current `submit/` workers for production. Do not copy an old report's individual
-script list into a v2.0 installation.
-
-Earlier PDF exports of the rRNA/smoke reports are historical snapshots. Their
-commands are superseded by these Markdown operating guides; measured figures
-remain available in the original exports.
+Reusable QC configuration schemas are under [`examples/qc/`](../examples/qc/README.md).
+Copy and edit one for a run; production QC launchers require an explicit config.

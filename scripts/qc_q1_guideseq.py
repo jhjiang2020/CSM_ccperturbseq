@@ -1808,6 +1808,16 @@ def run_guideseq_qc(fastq_pairs, ref_df, guideseq_cfg, out_dir,
     Returns:
         dict with per_lib_rates, merged_rates
     """
+    try:
+        from scripts.guide_design import enabled
+        from scripts.guide_design_qc import run_guideseq
+    except ModuleNotFoundError:
+        from guide_design import enabled
+        from guide_design_qc import run_guideseq
+    design_config = {'guide_design': guideseq_cfg.get('guide_design', {}), 'grna_structure': guideseq_cfg}
+    if enabled(design_config):
+        return run_guideseq(fastq_pairs, ref_df, guideseq_cfg, out_dir, find_anchor, _read_fastq_pairs,
+                            max_lev_dist, max_lev_dist_ibar, max_reads, matcher_factory=NeighborhoodMatcher)
     os.makedirs(out_dir, exist_ok=True)
 
     print(f"\n{'='*60}")

@@ -25,6 +25,24 @@ class ReleasePackagingTest(unittest.TestCase):
         exposed = [path for path in tracked if forbidden.search(path)]
         self.assertEqual(exposed, [])
 
+    def test_release_excludes_local_archive_and_pilot_qc_configs(self):
+        tracked = set(subprocess.check_output(
+            ["git", "ls-files"], cwd=ROOT, text=True
+        ).splitlines())
+        self.assertFalse(any(path.startswith("archive/") for path in tracked))
+        self.assertNotIn("ParseBiosciences-Pipeline.1.6.4", tracked)
+        for name in ("qc_config.yaml", "qc_config_guideseq.yaml",
+                     "qc_config_gex_grna_contamination.yaml"):
+            self.assertNotIn(name, tracked)
+            example = f"examples/qc/{name.replace('.yaml', '.example.yaml')}"
+            self.assertIn(example, tracked)
+        for name in ("scripts/guide_design.py", "scripts/design_preflight.py",
+                     "scripts/guide_design_qc.py", "scripts/benchmark_gex_common.py",
+                     "scripts/benchmark_gex_v2.py", "scripts/benchmark_gex_v2_report.py",
+                     "scripts/validate_asymmetric_pilot.py",
+                     "tests/fixtures/asymmetric_pilot_v2/manifest.json"):
+            self.assertIn(name, tracked)
+
     def test_every_literal_wrapper_runtime_asset_is_git_tracked(self):
         tracked = set(subprocess.check_output(
             ["git", "ls-files"], cwd=ROOT, text=True
@@ -111,7 +129,7 @@ class ReleasePackagingTest(unittest.TestCase):
         shared = "/medpop/rgupta/Jiahao/conda/envs/splitpipe-share"
         self.assertEqual(text.count(f'conda_prefix: "{shared}"'), 1)
         self.assertEqual(text.count(f'conda_env: "{shared}"'), 1)
-        self.assertIn("installation-free shared environment", text)
+        self.assertIn("No personal Conda/kallisto installation", text)
         self.assertNotIn("/home/unix/jjiahao/", text)
 
     def test_every_multislot_production_wrapper_has_matching_binding(self):

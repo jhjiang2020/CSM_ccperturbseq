@@ -17,6 +17,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -303,6 +304,8 @@ def submit(config_path, profile, args, *, dry_run=False, record=None):
     # Create/verify the record destination before dispatching any job.
     record = Path(record) if record else Path(read_config(config_path).get('paths', {}).get('log_dir', Path(config_path).parent / 'logs')) / 'uger_submissions.jsonl'
     record.parent.mkdir(parents=True, exist_ok=True)
+    sidecars = record.parent / (record.stem + '.records')
+    sidecars.mkdir(parents=True, exist_ok=True)
     fd = os.open(record, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o640)
     print(f'UGER {profile}: {resources.slots} slots, {resources.h_vmem}/slot, '
           f'{resources.slots * resources.memory_per_slot_gb:g}G total, {resources.h_rt}; '
@@ -317,11 +320,30 @@ def submit(config_path, profile, args, *, dry_run=False, record=None):
                  'config': str(Path(config_path).resolve()), 'profile': profile,
                  'job_id': match[1], 'qsub_output': output, 'command': actual,
                  'resources': payload(resources)}
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        # Job IDs are unique: an atomic per-job record needs no shared lock.
+        # Persist it before the optional JSONL append so an NFS lock outage
+        # cannot hide an already-dispatched job or encourage duplicate work.
+        serialized = json.dumps(entry, sort_keys=True) + '\n'
+        temporary_fd, temporary_name = tempfile.mkstemp(dir=sidecars, prefix='.submission-')
         try:
-            os.write(fd, (json.dumps(entry, sort_keys=True) + '\n').encode())
+            with os.fdopen(temporary_fd, 'w') as stream:
+                os.fchmod(stream.fileno(), 0o640)
+                stream.write(serialized)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary_name, sidecars / (match[1] + '.json'))
         finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            if os.path.exists(temporary_name):
+                os.unlink(temporary_name)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                os.write(fd, serialized.encode())
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError as error:
+            print(f'WARNING: job {match[1]} submitted; JSONL append unavailable: {error}. '
+                  f'Durable record: {sidecars / (match[1] + ".json")}', file=sys.stderr)
     finally:
         os.close(fd)
     print(output)

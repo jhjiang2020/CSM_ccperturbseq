@@ -36,6 +36,11 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
+try:
+    from scripts.guide_design import compile_design, emit_warnings, enabled
+except ModuleNotFoundError:
+    from guide_design import compile_design, emit_warnings, enabled
+
 
 # ---------------------------------------------------------------------------
 # Reverse complement
@@ -53,7 +58,7 @@ def reverse_complement(seq):
 # Core formatting
 # ---------------------------------------------------------------------------
 
-def format_reference(design_df, rev_comp_ibar=True, ibar_length=None):
+def format_reference(design_df, rev_comp_ibar=True, ibar_length=None, design_aware=False):
     """Convert a library design DataFrame to gRNA/iBAR reference table.
 
     For each design row, creates TWO entries:
@@ -84,7 +89,9 @@ def format_reference(design_df, rev_comp_ibar=True, ibar_length=None):
         )
         
     has_ibar = 'iBAR_1' in design_df.columns and 'iBAR_2' in design_df.columns
-    if not has_ibar:
+    if not has_ibar and design_aware:
+        print('  Missing iBAR columns represent design absence; the pilot must verify the downstream boundary.')
+    elif not has_ibar:
         print("  WARNING: iBAR_1 or iBAR_2 not found in dual-guide design. Proceeding with empty iBAR sequences.")
         print("  → Make sure to set `ibar_length: 0` in your config.yaml.")
 
@@ -721,6 +728,7 @@ def main():
 
     # --- Check-only mode: just run overlap analysis on existing reference ---
     if args.check_only:
+        cfg = None
         ref_path = args.check_only
         if not os.path.exists(ref_path):
             print(f"ERROR: Reference file not found: {ref_path}")
@@ -743,7 +751,12 @@ def main():
         ref_df = pd.read_csv(ref_path)
         print(f"  Loaded {len(ref_df)} entries")
         print_summary(ref_df)
-        if not args.skip_check:
+        if cfg and enabled(cfg):
+            contract = compile_design(ref_df, cfg)
+            emit_warnings(contract)
+            print(yaml.safe_dump(contract['capabilities'], sort_keys=False))
+            has_critical = False
+        elif not args.skip_check:
             has_critical = check_reference_overlap(ref_df, max_lev_grna, max_lev_ibar)
         else:
             print("\n  ⚠ Overlap check bypassed via --skip-check")
@@ -816,15 +829,26 @@ def main():
 
     # Format reference
     if mode == "single":
-        ref_df = format_reference_single(design_df, rev_comp_ibar=rev_comp, ibar_length=ibar_length)
+        ref_df = format_reference_single(design_df, rev_comp_ibar=rev_comp, ibar_length=None if cfg and enabled(cfg) else ibar_length)
     else:
-        ref_df = format_reference(design_df, rev_comp_ibar=rev_comp, ibar_length=ibar_length)
+        ref_df = format_reference(design_df, rev_comp_ibar=rev_comp, ibar_length=ibar_length,
+                                  design_aware=bool(cfg and enabled(cfg)))
+
+    contract = None
+    if cfg is not None and enabled(cfg):
+        contract = compile_design(ref_df, cfg)
+        emit_warnings(contract)
+        ref_df = pd.DataFrame(contract['rows'])
+        ibar_length = max(length for profile in contract['profiles'].values() for length in profile['ibar_lengths'])
+        ref_df['guide_unit_id'] = [row['guide_unit_id'] for row in contract['rows']]
+        ref_df['ibar_length'] = ref_df['ibar_seq'].str.len()
+        ref_df['ibar_status'] = ref_df['ibar_length'].map(lambda length: 'absent_by_design' if length == 0 else 'present')
 
     # Print summary
     print_summary(ref_df)
 
     # Run overlap check if config provides distance parameters
-    if args.config and not args.skip_check:
+    if args.config and not args.skip_check and contract is None:
         grna_cfg = cfg.get('grna_matching', {})
         max_lev_grna = grna_cfg.get('max_lev_dist', 3)
         max_lev_ibar = grna_cfg.get('max_lev_dist_ibar', 3)
@@ -833,9 +857,14 @@ def main():
         print("\n  ⚠ Skipped reference overlap check (--skip-check)")
 
     # Save
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
     ref_df.to_csv(output_path, index=False)
     print(f"\n  ✓ Saved reference to {output_path}")
+    if contract is not None:
+        contract_path = str(Path(output_path).with_suffix('.design.yaml'))
+        with open(contract_path, 'w') as handle:
+            yaml.safe_dump(contract, handle, sort_keys=False)
+        print(f"  Saved resolved design and capabilities to {contract_path}")
 
     # Also save the iBAR → pair_id lookup as a separate file for convenience
     if ibar_length > 0:

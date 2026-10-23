@@ -46,6 +46,12 @@ def warn_if_ibar_unobservable(config, manifest_path, sample_records=10_000):
     This is diagnostic only. Step 1c still invokes the ordinary Step 3 code,
     which remains authoritative and will not invent a missing iBAR.
     """
+    try:
+        from scripts.guide_design import enabled
+    except ModuleNotFoundError:
+        from guide_design import enabled
+    if enabled(config):
+        return None
     structure = config.get("grna_structure", {}) or {}
     assignment = config.get("guide_assignment", {}) or {}
     ibar_length = int(structure.get("ibar_length", 0))
@@ -213,6 +219,7 @@ def install_strict_match_product(match_output, config, library):
         "dropped_ibar_distance": 0,
         "dropped_unresolved_ibar": 0,
         "dropped_ibar_decoupled": 0,
+        "dropped_structure_conflict": 0,
     }
     with gzip.open(unfiltered, "rt", newline="") as source, gzip.open(
         temporary, "wt", newline=""
@@ -233,6 +240,9 @@ def install_strict_match_product(match_output, config, library):
         writer.writeheader()
         for row in reader:
             counts["input_matches"] += 1
+            if row.get('structure_status', 'concordant') != 'concordant':
+                counts['dropped_structure_conflict'] += 1
+                continue
             guide_distance = int(row["grna_dist"])
             ibar_distance = int(row["ibar_dist"])
             resolved_ibar = str(row.get("ibar_seq_corrected", "")).strip()
@@ -242,7 +252,8 @@ def install_strict_match_product(match_output, config, library):
             if guide_distance < 0 or guide_distance > max_guide:
                 counts["dropped_guide_distance"] += 1
                 continue
-            if dual_mode and require_ibar and not resolved_ibar:
+            absent_by_design = row.get('ibar_status') == 'absent_by_design' and row.get('structure_status') == 'concordant'
+            if dual_mode and require_ibar and not resolved_ibar and not absent_by_design:
                 counts["dropped_unresolved_ibar"] += 1
                 continue
             if dual_mode and reject_decoupled and ibar_decoupled:

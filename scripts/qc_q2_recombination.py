@@ -42,6 +42,8 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 from scripts.qc_config_loader import load_qc_config
+from scripts.guide_design_qc import cell_design_qc
+from scripts.guide_design import eligible_assignments, legacy_model_eligible
 
 # Import assignment function for Part C threshold sweep
 assign_mod = importlib.import_module("scripts.04_assign_grna_to_cells")
@@ -737,6 +739,10 @@ def count_model_categories(assignment_df, valid_bcs=None, granular=False):
     Returns:
         dict of category counts.
     """
+    if 'pair_resolution_basis' in assignment_df.columns:
+        if not legacy_model_eligible(assignment_df):
+            raise ValueError('Design-aware observations do not support the legacy recombination likelihood; use cell_design_qc')
+        assignment_df = eligible_assignments(assignment_df)
     if valid_bcs is not None:
         valid_bcs = set(valid_bcs)
         df_valid = assignment_df[assignment_df['bc_wells'].isin(valid_bcs)]
@@ -1118,6 +1124,9 @@ def run_recombination_model(adata, out_dir, moi=0.3, doublet_rate=0.03, extended
     output_dir = os.path.dirname(out_dir)
     assign_path = os.path.join(output_dir, 'grna_assignment', 'grna_cell_assignment.csv')
     assignment_df = pd.read_csv(assign_path)
+    if 'pair_resolution_basis' in assignment_df.columns and not legacy_model_eligible(assignment_df):
+        molecules = pd.read_csv(os.path.join(output_dir, 'grna_assignment', 'grna_umi_counts.csv.gz'))
+        return cell_design_qc(assignment_df, molecules, out_dir, valid_bcs)
     
     if not split_by_sample:
         counts = count_model_categories(assignment_df, valid_bcs, granular=granular)
@@ -1184,6 +1193,15 @@ def sweep_umi_threshold(deduped_df, ref_df, valid_bcs, out_dir, cfg_recomb, thre
     Returns:
         DataFrame of MLE results per threshold.
     """
+    if 'guide_unit_id' in deduped_df.columns and not legacy_model_eligible(deduped_df):
+        rows = []
+        for threshold in thresholds or cfg_recomb.get('umi_thresholds', [1, 2, 3, 4, 5, 8, 10]):
+            calls = assign_dual_guide_pairs(deduped_df[deduped_df['bc_wells'].isin(valid_bcs)], ref_df, threshold)
+            rows.append({'umi_threshold': threshold, 'resolved_pairs': int(calls['pair_id'].ne('').sum()),
+                         'unresolved_observations': int(calls['pair_id'].eq('').sum()), 'recombination_rate': None})
+        result = pd.DataFrame(rows)
+        result.to_csv(os.path.join(out_dir, 'q2_design_threshold_sweep.csv'), index=False)
+        return result
     print("\n  --- Part C: UMI Threshold Sweep ---")
     
     if thresholds is None:
@@ -1284,6 +1302,8 @@ def main():
     assign_dir = os.path.join(output_dir, 'grna_assignment')
     assign_path = os.path.join(assign_dir, 'grna_cell_assignment.csv')
     umi_counts_path = os.path.join(assign_dir, 'grna_umi_counts.csv')
+    if not os.path.exists(umi_counts_path):
+        umi_counts_path += '.gz'
     ref_path = cfg['paths']['grna_reference']
     
     # 1. Load Data
@@ -1295,6 +1315,10 @@ def main():
     assignment_df = pd.read_csv(assign_path)
     umi_df = pd.read_csv(umi_counts_path)
     ref_df = pd.read_csv(ref_path)
+    if 'guide_unit_id' in umi_df.columns and not legacy_model_eligible(umi_df):
+        cell_design_qc(assignment_df, umi_df, out_dir, valid_bcs)
+        sweep_umi_threshold(umi_df, ref_df, valid_bcs, out_dir, cfg.get('recombination', {}))
+        return
 
     # --- Part A ---
     qc_cfg = cfg.get('qc', {})

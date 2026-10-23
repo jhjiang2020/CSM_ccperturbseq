@@ -260,6 +260,27 @@ class UnifiedUgerResourcesTest(unittest.TestCase):
                     pipeline(path, 'all', False)
                 qsub.assert_not_called()
 
+    def test_dispatched_job_survives_shared_filesystem_lock_failure(self):
+        import errno
+        import json
+        from unittest.mock import patch
+        from scripts.uger_resources import submit
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = self.config(root, {})
+            record = root / 'logs/uger_submissions.jsonl'
+            with patch('scripts.uger_resources.subprocess.check_output', return_value='12345.25-32:1\n') as qsub, \
+                 patch('scripts.uger_resources.fcntl.flock', side_effect=OSError(errno.ENOLCK, 'No locks available')):
+                job = submit(path, 'kallisto_benchmark', ['-t', '25-32', 'worker.sh'], record=record)
+            qsub.assert_called_once()
+            entry = json.loads((root / 'logs/uger_submissions.records/12345.json').read_text())
+            self.assertEqual(job, '12345')
+            self.assertEqual(entry['job_id'], job)
+            self.assertEqual(entry['qsub_output'], '12345.25-32:1')
+            self.assertEqual(entry['command'], qsub.call_args.args[0])
+            self.assertEqual(entry['resources']['slots'], 16)
+            self.assertEqual(record.read_text(), '')
+
     def test_resource_defaults_match_standalone_worker_directives(self):
         import re
         from scripts.uger_resources import load_resources
@@ -274,7 +295,8 @@ class UnifiedUgerResourcesTest(unittest.TestCase):
             for profile, worker in workers.items():
                 with self.subTest(profile=profile):
                     r = load_resources(path, profile)
-                    text = (ROOT / f'submit/submit_{worker}.sh').read_text()
+                    filename = 'run_gex_benchmark_v2.sh' if profile == 'kallisto_benchmark' else f'submit_{worker}.sh'
+                    text = (ROOT / 'submit' / filename).read_text()
                     self.assertEqual(int(re.search(r'^#\$ -pe smp (\d+)', text, re.M)[1]), r.slots)
                     self.assertEqual(float(re.search(r'^#\$ -l h_vmem=(\d+)G', text, re.M)[1]), r.memory_per_slot_gb)
                     hours, minutes, seconds = map(int, re.search(r'^#\$ -l h_rt=([\d:]+)', text, re.M)[1].split(':'))

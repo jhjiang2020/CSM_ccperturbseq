@@ -65,7 +65,7 @@ class GuideModelTest(unittest.TestCase):
     def setUpClass(cls):
         with open(ROOT / "config.yaml") as handle:
             cls.base_cfg = yaml.safe_load(handle)
-        with open(ROOT / "qc_config_gex_grna_contamination.yaml") as handle:
+        with open(ROOT / "examples/qc/qc_config_gex_grna_contamination.example.yaml") as handle:
             cls.qc_cfg = yaml.safe_load(handle)["gex_grna_contamination_qc"]
         cls.reference = pd.read_csv(ROOT / "references/grna_ibar_reference.csv")
         cls.model = GuideModel(
@@ -587,7 +587,7 @@ class MiniPipelineTest(unittest.TestCase):
     def test_benchmark_and_paired_filter_end_to_end(self):
         with open(ROOT / "config.yaml") as handle:
             base = yaml.safe_load(handle)
-        with open(ROOT / "qc_config_gex_grna_contamination.yaml") as handle:
+        with open(ROOT / "examples/qc/qc_config_gex_grna_contamination.example.yaml") as handle:
             qc = yaml.safe_load(handle)["gex_grna_contamination_qc"]
         reference = pd.read_csv(ROOT / "references/grna_ibar_reference.csv")
         row = reference.iloc[0]

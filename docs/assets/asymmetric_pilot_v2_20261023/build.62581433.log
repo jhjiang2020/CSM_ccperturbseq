@@ -1,0 +1,6 @@
+job=62581433 host=uger-rh8-d007.broadinstitute.org python=/medpop/rgupta/Jiahao/conda/envs/splitpipe/bin/python env=/medpop/rgupta/Jiahao/conda/envs/splitpipe mode=build
+Cpus_allowed_list:	1-2,65-66
+C1: scanned 100,000; selected 20 pairs
+C2: scanned 100,000; selected 20 pairs
+T1: scanned 100,000; selected 20 pairs
+T2: scanned 100,000; selected 20 pairs

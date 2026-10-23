@@ -1816,6 +1816,10 @@ def classify_inferred_sources(adata, assignment_df, umi_df, method="percentile",
         DataFrame of inferred singlets with 'source' column ('dropout' or 'recombinant').
         Returns None if no inferred singlets found.
     """
+    from scripts.guide_design import legacy_model_eligible
+    if 'guide_unit_id' in umi_df.columns and not legacy_model_eligible(umi_df):
+        warnings.warn('Q3c unavailable: design-aware missing-partner calls do not identify dropout versus recombination', UserWarning)
+        return None
     from scripts.qc_q2_recombination import estimate_background_noise
 
     print(f"\n  --- Q3c: Inferred Singlet Source Classification ---")

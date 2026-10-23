@@ -176,5 +176,9 @@ combination, stale input rejection and cleanup after reference-validation failur
 The optional real STAR test builds a tiny repeated-locus genome, checks the
 reported secondary alignments and fractional counts under all UMI modes, and
 rejects a primary-only BAM. Full-depth STAR fractional resource and
-biological comparisons have not been benchmarked; earlier kallisto reports
-retain their original arms and measurements.
+biological comparisons require new measurements. The current
+[50M-pair benchmark](GEX_BENCHMARK_V2.md) covers all twelve configurations with
+shared alignment/assignment caches, stage resource accounting, all-pairs
+agreement and fixed-cohort UMI gains. See the completed
+[measured comparison and assignment-cache explanation](GEX_BENCHMARK_V2_REPORT.md).
+The earlier 10M-pair kallisto reports are superseded by this experiment.

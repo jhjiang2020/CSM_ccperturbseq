@@ -53,9 +53,14 @@ for each chosen UMI/assignment mode.
 
 Compare UMIs/genes per cell, called-cell overlap, a fixed cell cohort and gene
 expression agreement. Keep runtime components and one-time reference building
-separate. The [original four-library report](KALLISTO_PILOT_BENCHMARK_REPORT.md)
-is the **serial-counter baseline**; it must not be cited as the optimized v2.0
-runtime. Completed optimization results are published separately.
+separate. Use the current [50M-pair report](GEX_BENCHMARK_V2_REPORT.md) and
+its [design/accounting definitions](GEX_BENCHMARK_V2.md). Earlier nine-arm
+reports and runners have been retired to Git history and the local UGER archive.
+
+Copy a QC schema from `examples/qc/` and set its `base_config`/`sc_config` to
+your own pipeline YAML. Pass the copied file explicitly to QC launchers; root
+pilot `qc_config*.yaml` files are no longer distributed.
+
 
 ## Existing STAR BAM decontamination
 

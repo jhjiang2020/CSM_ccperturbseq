@@ -1,0 +1,152 @@
+# Example only. Copy to your run folder, edit all paths and assay settings,
+# and point base_config/sc_config to your own pipeline YAML.
+# GEX gRNA cross-contamination QC and 54-cycle in-silico benchmark.
+# Values not defined here are inherited from config.yaml.
+base_config: "../../config_dual.yaml"
+
+# Production v1.4 contamination QC uses environment.conda_env from config.yaml
+# (normally splitpipe). csm_analysis is reserved for downstream analysis.
+
+gex_grna_contamination_qc:
+  output_dir: "output/qc_gex_grna_contamination"
+  short_read_length: 54
+
+  # Raw FASTQ parsing/classification uses bounded fork workers on UGER. Worker
+  # count comes from --threads/NSLOTS; at most 2*workers batches are retained.
+  performance:
+    batch_size: 20000
+
+  # Conservative surrogate truth evaluated on the original 150-cycle pilot R1.
+  # A primary positive requires TSO + complete stem + iBAR-sized block + the
+  # correctly paired partial tracr. A reference-guide match is tracked as a
+  # stronger confidence tier but is not required, allowing unknown/recombined
+  # guide contaminants to remain visible.
+  full_length_truth:
+    tso_max_edit_dist: 3
+    tso_search_end: 50
+    anchor_max_mismatches: 2
+    guide_max_mismatches: 2
+    ibar_max_mismatches: 2
+    splitpipe_tso_seq: "AACGCAGAGTGAATGGG"
+    splitpipe_tso_start_limit: 15
+    guide_prefix_lengths: [12, 15, 18]
+    # Prefix indexes cover the guide plus the first scaffold bases exposed by
+    # a 54-cycle R1. They also support diagnostic unexpected TSO offsets.
+    template_prefix_min_length: 15
+    template_prefix_max_length: 24
+    template_prefix_max_mismatches: 2
+
+  raw_benchmark:
+    # 0 scans all pilot reads. Use 5,000,000 for a quick development run.
+    max_reads: 0
+    # Hash-based sampling remains distributed across all FASTQs, but still has
+    # to decompress the full files. Keep 1.0 for the final prevalence estimate.
+    sample_fraction: 1.0
+    # Detailed per-read evidence is diagnostic only and is capped for disk use.
+    read_table_max: 200000
+    base_composition_length: 100
+
+  # Correct R2 barcodes as split-pipe does, then estimate PCR-deduplicated
+  # molecule cardinalities for all, TSO, and contaminant subsets. The final
+  # prevalence run must scan every read (sample_fraction=1).
+  molecule_estimation:
+    enabled: true
+    barcode_data_template: "{output_dir}/gex_{library}/process/barcode_data.csv"
+    amplicon_sequence: "NNNNNNNNNN33333333ATGAGGGGTCAG22222222TCCAACCACCTC11111111"
+    barcode_max_mismatches: 2
+    # Match split-pipe v1.6.4's correction calibration sample and threshold.
+    barcode_sample_start: 3000000
+    barcode_sample_end: 4000000
+    perfect_barcode_cell_fraction: 0.92
+    # 2^18 one-byte registers per sketch; nominal relative SE ~0.20%.
+    hll_precision: 18
+
+  short_read_filters:
+    # Intact GEX contaminants start with TSO at offset 0. They escaped the size
+    # selection before the dedicated gRNA fraction's circularization-capture
+    # amplification and therefore do not carry its random N7 prefix. i7/i5 are
+    # separate index reads; no additional N3 R1 prefix is assumed. Offsets 1-2
+    # tolerate rare 5' damage/sequencing error; wider offsets are diagnostic.
+    max_tso_start: 2
+    guide_mismatch_thresholds: [0, 1, 2]
+    template_mismatch_thresholds: [0, 1, 2, 3]
+    guide_prefix_lengths: [12, 15, 18]
+    min_partial_stem_bases: 3
+    # At offset 2, a 21-nt spacer leaves one scaffold base in a 54-cycle R1.
+    min_boundary_bases: 1
+
+    # Used only to create the example clean/rejected FASTQs and by --mode filter.
+    # Do not use production-filter output until short54_filter_metrics.csv has
+    # been reviewed, especially the TSO-positive hard-negative FPR.
+    selected_method: "tso_template_boundary_d1"
+    recommendation_max_hard_negative_fpr: 0.001
+    # Gate automatic recommendations on the Wilson upper bound, not only the
+    # observed point estimate (important when no false positives are observed).
+    recommendation_use_upper_ci: true
+
+  synthetic_fastq:
+    enabled: true
+    # Deterministic hash sample distributed across all lanes/files. At the
+    # current pilot scale, 0.0005 should yield roughly 10^5 reads per library.
+    sample_fraction: 0.0005
+    # 0 disables the order-dependent safety cap.
+    max_reads: 0
+    write_r2: true
+
+  # Ground-truth construct reads are written in the exact sequence state STAR
+  # receives for both current full R1 and raw-R1=54. Original truth/cell/UMI
+  # metadata is encoded in QNAME so alignment outcomes can be joined exactly.
+  alignment_benchmark:
+    enabled: true
+    # Deterministic hash sample of corrected (CB, pB) groups across every
+    # lane/file. Retaining all reads/UMIs in selected groups preserves PCR
+    # families for the split-pipe-equivalent Hamming-1 molecule audit.
+    sample_fraction: 1.0
+    # Safety cap after hash sampling; 0 disables it. The summary flags a reached
+    # cap because that would make the retained tail order-dependent.
+    max_truth_reads: 2000000
+    # Stop before controlled STAR rather than report molecule results from a
+    # panel that truncated some selected CB/pB groups.
+    fail_if_safety_cap_reached: true
+    hll_precision: 18
+    # Retain UMI read counts for the bounded truth subset and reproduce
+    # split-pipe's abundance-directed Hamming-distance-1 molecule collapse.
+    exact_molecule_collapse: true
+    # Primary uncertainty intervals resample corrected CB/pB sampling units;
+    # read-level Wilson intervals are retained only as naive diagnostics.
+    cluster_bootstrap_replicates: 1000
+    star_threads: 8
+    star_memory: "16G"
+    star_runtime: "12:00:00"
+    # Exact 3-prime adapter clipping argument used by split-pipe v1.6.4.
+    star_clip3p_adapter: "GAGGTGGTTGGA"
+    # Each configured arm becomes one UGER task per library. Valid arms are
+    # "full" and "short<short_read_length>" ("short54" is normalized when the
+    # simulated length is changed).
+    variants: ["full", "short54"]
+    output_subdir: "alignment_star"
+
+  bam_audit:
+    # Optional compatibility cross-check. Default split-pipe BAMs omit
+    # STAR-unmapped reads, so this cannot estimate raw contamination and is not
+    # a v1.4 release gate.
+    enabled: false
+    required_for_audit: false
+    # Empty means output/gex_<library>/process/barcode_headAligned_anno.bam.
+    bam_path_template: ""
+    # 0 scans the full annotated BAM. A small number is useful only for code
+    # testing because the BAM is name-sorted and a head sample is cell-biased.
+    max_primary_reads: 0
+    track_exact_contaminant_umis: true
+
+  # Optional post-filter arm. It consumes the Step 1c manifest and compares
+  # GEX-derived guide molecules with the ordinary dedicated-guide matches.
+  # It remains off until Step 1c has been run in an isolated output namespace.
+  guide_assignment_impact:
+    enabled: false
+    step1c_manifest_template: "{output_dir}/gex_grna_identity/manifests/{library}.step1c.complete.json"
+    dedicated_match_template: "{output_dir}/grna_matches/{library}_grna_matches.tsv.gz"
+    output_subdir: "guide_assignment_impact"
+
+  plots:
+    enabled: true

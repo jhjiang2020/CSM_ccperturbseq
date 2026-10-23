@@ -5,9 +5,8 @@
 > installation and commands, use the [quick start](QUICKSTART.md),
 > [configuration reference](CONFIGURATION.md) and [UGER resource guide](UGER_RESOURCES.md).
 > Historical counts/timings are not measurements of the new kallisto backend.
-> The maintained read-recovery and rRNA entry points are
-> `submit/submit_gex_grna_read_recovery.sh` and `submit/submit_gex_rrna_audit.sh`.
-> Earlier one-use wrappers are [archived](../archive/audit_workflows/2026_pilot/README.md).
+> Experiment-specific audit workflows remain in Git history and the local
+> UGER archive; their original commands are provenance, not release entry points.
 
 
 ## Executive summary
@@ -228,7 +227,7 @@ and an arm-specific barcode/molecule-composition effect is
 All sampled native rates were within 3 percentage points of their full-run summaries.
 
 Detailed aggregate tables are stored under
-[`output/pilot_4_sublib_audit/barcode_rejection/`](../output/pilot_4_sublib_audit/barcode_rejection/);
+`output/pilot_4_sublib_audit/barcode_rejection/` (local run output);
 the documentation asset directory contains only the two report-facing plots
 below. Independent product reconciliation status: **passed**.
 
@@ -424,10 +423,10 @@ separately; the paired-read follow-up above evaluates R1 overlap and TSO/adapter
 read-through independently.
 
 Detailed aggregate tables and run manifests are stored only under
-[`output/pilot_4_sublib_audit/barcode_crossover/`](../output/pilot_4_sublib_audit/barcode_crossover/).
+`output/pilot_4_sublib_audit/barcode_crossover/` (local run output).
 Complete representative sequences, reconstructed inserts, and BLAST-ready
 FASTA are under
-[`output/pilot_4_sublib_audit/bc1_examples/`](../output/pilot_4_sublib_audit/bc1_examples/).
+`output/pilot_4_sublib_audit/bc1_examples/` (local run output).
 The documentation asset directory contains only the three report-facing plots.
 Independent reconciliation status: **passed**.
  All native sampled rates were within 3 percentage points of their full-run summaries.

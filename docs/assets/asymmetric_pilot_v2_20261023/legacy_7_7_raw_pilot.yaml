@@ -1,0 +1,23 @@
+status: ok
+sample_limit: 10000
+min_informative_reads: 100
+warnings: []
+input_type: raw_fastq
+reference_ibar_length_counts:
+  7: 46
+unique_reference_ibars: 46
+counts:
+  sampled_reads: 1920
+  extracted_reads: 1920
+  exact_guide_reads: 1920
+  global_stored_exact: 1920
+  global_rc_exact: 0
+  global_stored_only: 1920
+  global_rc_only: 0
+  same_guide_stored_exact: 1920
+  same_guide_rc_exact: 0
+  same_guide_stored_only: 1920
+  same_guide_rc_only: 0
+library: POOL
+reference_path: /medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/tests/fixtures/asymmetric_pilot_v2/reference_7_7.csv
+configured_ibar_length: 7

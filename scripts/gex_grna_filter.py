@@ -1167,6 +1167,16 @@ def settings_from_config(config: Mapping, config_path: str | Path) -> FilterSett
     if not raw_reference_path.is_absolute():
         raw_reference_path = Path(config_path).resolve().parent / raw_reference_path
     reference_path = str(raw_reference_path.resolve())
+    try:
+        from scripts.guide_design import enabled
+    except ModuleNotFoundError:
+        from guide_design import enabled
+    if enabled(config):
+        with raw_reference_path.open(newline='') as handle:
+            reader = csv.DictReader(line for line in handle if not line.lstrip().startswith('#'))
+            if not reader.fieldnames or 'grna_seq' not in reader.fieldnames:
+                raise ValueError('Guide reference requires grna_seq')
+            guide_lengths = tuple(sorted({len(row['grna_seq'].strip()) for row in reader}))
 
     return FilterSettings(
         tso_sequence=tso_sequence,

@@ -31,6 +31,7 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 from scripts.qc_config_loader import load_qc_config
+from scripts.guide_design import eligible_assignments
 
 
 # ============================================================================
@@ -55,7 +56,7 @@ def analyze_fitness(assign_path, combo_freq_path, out_dir):
         print("    Provide via --combo_freq to enable this analysis.")
         return None
 
-    assign_df = pd.read_csv(assign_path)
+    assign_df = eligible_assignments(pd.read_csv(assign_path))
     combo_freq = pd.read_csv(combo_freq_path)
 
     print(f"    Pre-lentiviral combos: {len(combo_freq)}")
@@ -331,7 +332,7 @@ def main():
         adata_path = os.path.join(output_dir, 'combined_adata.h5ad')
         adata = sc.read_h5ad(adata_path)
 
-        assign_df = pd.read_csv(assign_path)
+        assign_df = eligible_assignments(pd.read_csv(assign_path))
         combo_freq_df = pd.read_csv(args.combo_freq)
 
         # Standardize column names for identify_novel_combos

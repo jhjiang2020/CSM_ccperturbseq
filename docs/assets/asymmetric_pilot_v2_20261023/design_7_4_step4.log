@@ -1,0 +1,57 @@
+
+============================================================
+  Step 4: Cell-Level gRNA Assignment
+  iBAR length:             7
+  UMI dedup iBAR grouping: True
+  UMI max edits:           1
+  Min reads per UMI:       1
+  Saturation curve:        False
+  Parallel CPUs:           2
+  Requested source mode:   auto
+============================================================
+
+  Loaded reference annotations: ['grna_name', 'position', 'stem_variant', 'pair_id', 'target_combo', 'target_version', 'gi_pair', 'gi_version', 'guide_unit_id']
+
+  Streaming dedicated UMI evidence across libraries...
+  Grouping by: ['bc_wells', 'grna_name', 'target_gene', 'guide_unit_id', 'position', 'ibar_seq_corrected', 'ibar_seq_unresolved', 'ibar_status', 'pair_candidates', 'pair_candidate_count', 'structure_status', 'guide_design_fingerprint', 'resolution_status', 'legacy_model_eligible']
+    POOL: 1,920 reads streamed in 0.0s, 320 groups
+    POOL: UMI collapsing done — 0 UMIs collapsed
+
+  Guide UMI matrix: 240 cells × 12 guides
+    Non-zero entries: 320
+    Sparsity: 0.8889
+  Saved dedicated assignment products under: /medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/final/validation/design_7_4/grna_assignment
+
+  UMI dedup summary:
+    Total reads streamed:        1,920
+    Total UMIs (raw):              960
+    UMIs after filter:             960
+    UMIs after collapse:           960
+    Sequencing saturation:      50.0%
+    Unique groups:                 320
+    Unique cells:                  240
+    Unique guides:                  12
+  Saved guide annotations: /medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/final/validation/design_7_4/grna_assignment/guide_annotations.csv
+  Saved QC stats: /medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/final/validation/design_7_4/grna_assignment/grna_qc_stats.yaml
+
+  Saved UMI threshold sensitivity plot: /medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/final/validation/design_7_4/grna_assignment/umi_threshold_sensitivity.png
+  Saved reads-per-UMI distribution plot: /medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/final/validation/design_7_4/grna_assignment/reads_per_umi_distribution.png
+  Saved per-cell reads-per-UMI plot: /medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/final/validation/design_7_4/grna_assignment/median_reads_per_umi_per_cell.png
+
+  QC Summary:
+    Total matched reads:           1,920
+    Unique cells with reads:         240
+    Cells with assignment:           240
+    Sequencing saturation:        50.0%
+    Median reads/UMI:                2.0
+    Mean pairs/cell:                1.00
+    Median UMI/cell-guide:           3.0
+
+  Pair-Level Analysis:
+    Complete pairs:                 80
+    Inferred pairs:                160
+    Unique pair_ids:                23
+
+============================================================
+  Step 4 complete!
+============================================================

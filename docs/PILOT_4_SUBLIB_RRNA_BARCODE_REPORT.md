@@ -5,9 +5,8 @@
 > installation and commands, use the [quick start](QUICKSTART.md),
 > [configuration reference](CONFIGURATION.md) and [UGER resource guide](UGER_RESOURCES.md).
 > Historical counts/timings are not measurements of the new kallisto backend.
-> The maintained read-recovery and rRNA entry points are
-> `submit/submit_gex_grna_read_recovery.sh` and `submit/submit_gex_rrna_audit.sh`.
-> Earlier one-use wrappers are [archived](../archive/audit_workflows/2026_pilot/README.md).
+> Experiment-specific audit workflows remain in Git history and the local
+> UGER archive; their original commands are provenance, not release entry points.
 > Raw barcode–UMI recovery is a molecule proxy; it is not automatically
 > a gene-resolved expression UMI count under the Step 1a correction/assignment policy.
 
@@ -15,7 +14,7 @@
 > **Full four-sublibrary census.** This classifies every one of the
 > 1,680,846,154 raw PE150 GEX read pairs from
 > C1, C2, T1, T2 — a complete enumeration, not a sample. It supersedes
-> the interim [100k C1 smoke report](PILOT_100K_RRNA_BARCODE_SMOKE_REPORT.md).
+> the interim 100k C1 smoke report, now retired to Git history and the local archive.
 
 ## 1. rRNA abundance
 
@@ -161,7 +160,7 @@ The unweighted four-library mean N6/poly(T) rRNA rate ratio is
 2.39).
 
 Compact source tables:
-[`output/pilot_4_sublib_audit/rrna_barcode_diagnostic/aggregate/`](../output/pilot_4_sublib_audit/rrna_barcode_diagnostic/aggregate/).
+`output/pilot_4_sublib_audit/rrna_barcode_diagnostic/aggregate/` (local run output).
 Reconciled `central_summary.csv` SHA-256:
 `644b71d33b9667f84e46eef729c5dc80dcd02db2a3bec78ef23ab7a06a2c07a2`.
 Shared rRNA reference-manifest SHA-256:

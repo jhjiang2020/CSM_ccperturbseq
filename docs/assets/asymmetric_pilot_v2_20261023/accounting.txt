@@ -1,0 +1,260 @@
+==============================================================
+qname        broad
+hostname     uger-rh8-d007.broadinstitute.org
+group        broad
+owner        jjiahao
+project      broad
+department   defaultdepartment
+jobname      csm_asym_v2
+jobnumber    62581429
+taskid       undefined
+account      sge
+priority     0
+cwd          NONE
+submit_host  login04.broadinstitute.org
+submit_cmd   qsub -terse -v PROJECT_ROOT=/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq,RUN_DIR=/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023,FIXTURE_DIR=/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/tests/fixtures/asymmetric_pilot_v2,MODE=build -o /medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/build.$JOB_ID.log submit/validate_asymmetric_pilot.sh
+qsub_time    10/23/2026 14:41:34.913
+start_time   10/23/2026 14:41:35.471
+end_time     10/23/2026 14:41:40.524
+granted_pe   smp
+slots        2
+failed       0
+deleted_by   NONE
+exit_status  1
+ru_wallclock 5.053
+ru_utime     1.618
+ru_stime     0.223
+ru_maxrss    81768
+ru_ixrss     0
+ru_ismrss    0
+ru_idrss     0
+ru_isrss     0
+ru_minflt    41863
+ru_majflt    411
+ru_nswap     0
+ru_inblock   106256
+ru_oublock   48
+ru_msgsnd    0
+ru_msgrcv    0
+ru_nsignals  0
+ru_nvcsw     7464
+ru_nivcsw    13
+wallclock    5.512
+cpu          1.840
+mem          0.094
+io           0.048
+iow          0.020
+ioops        5427
+maxvmem      294.926M
+maxrss       0.000
+maxpss       0.000
+arid         undefined
+jc_name      NONE
+==============================================================
+qname        broad
+hostname     uger-rh8-d004.broadinstitute.org
+group        broad
+owner        jjiahao
+project      broad
+department   defaultdepartment
+jobname      csm_asym_v2
+jobnumber    62581430
+taskid       undefined
+account      sge
+priority     0
+cwd          NONE
+submit_host  login04.broadinstitute.org
+submit_cmd   qsub -terse -v PROJECT_ROOT=/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq,RUN_DIR=/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023,FIXTURE_DIR=/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/tests/fixtures/asymmetric_pilot_v2,MODE=build -o /medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/build.$JOB_ID.log submit/validate_asymmetric_pilot.sh
+qsub_time    10/23/2026 14:42:20.127
+start_time   10/23/2026 14:42:20.494
+end_time     10/23/2026 14:42:26.886
+granted_pe   smp
+slots        2
+failed       0
+deleted_by   NONE
+exit_status  1
+ru_wallclock 6.392
+ru_utime     3.000
+ru_stime     0.304
+ru_maxrss    86804
+ru_ixrss     0
+ru_ismrss    0
+ru_idrss     0
+ru_isrss     0
+ru_minflt    43326
+ru_majflt    410
+ru_nswap     0
+ru_inblock   152080
+ru_oublock   48
+ru_msgsnd    0
+ru_msgrcv    0
+ru_nsignals  0
+ru_nvcsw     7584
+ru_nivcsw    23
+wallclock    6.679
+cpu          3.303
+mem          0.000
+io           0.008
+iow          0.000
+ioops        1301
+maxvmem      12.637M
+maxrss       0.000
+maxpss       0.000
+arid         undefined
+jc_name      NONE
+==============================================================
+qname        broad
+hostname     uger-rh8-d007.broadinstitute.org
+group        broad
+owner        jjiahao
+project      broad
+department   defaultdepartment
+jobname      csm_asym_v2
+jobnumber    62581433
+taskid       undefined
+account      sge
+priority     0
+cwd          NONE
+submit_host  login04.broadinstitute.org
+submit_cmd   qsub -terse -v PROJECT_ROOT=/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq,RUN_DIR=/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023,FIXTURE_DIR=/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/tests/fixtures/asymmetric_pilot_v2,MODE=build -o /medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/build.$JOB_ID.log submit/validate_asymmetric_pilot.sh
+qsub_time    10/23/2026 14:43:21.700
+start_time   10/23/2026 14:43:22.213
+end_time     10/23/2026 14:43:28.776
+granted_pe   smp
+slots        2
+failed       0
+deleted_by   NONE
+exit_status  0
+ru_wallclock 6.563
+ru_utime     3.280
+ru_stime     0.238
+ru_maxrss    90964
+ru_ixrss     0
+ru_ismrss    0
+ru_idrss     0
+ru_isrss     0
+ru_minflt    44179
+ru_majflt    410
+ru_nswap     0
+ru_inblock   136376
+ru_oublock   464
+ru_msgsnd    0
+ru_msgrcv    0
+ru_nsignals  0
+ru_nvcsw     7597
+ru_nivcsw    25
+wallclock    7.382
+cpu          3.518
+mem          0.015
+io           0.028
+iow          0.000
+ioops        4380
+maxvmem      254.340M
+maxrss       0.000
+maxpss       0.000
+arid         undefined
+jc_name      NONE
+==============================================================
+qname        broad
+hostname     uger-rh8-d007.broadinstitute.org
+group        broad
+owner        jjiahao
+project      broad
+department   defaultdepartment
+jobname      csm_asym_v2
+jobnumber    62581443
+taskid       undefined
+account      sge
+priority     0
+cwd          NONE
+submit_host  login04.broadinstitute.org
+submit_cmd   qsub -terse -v PROJECT_ROOT=/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq,RUN_DIR=/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023,FIXTURE_DIR=/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/tests/fixtures/asymmetric_pilot_v2,MODE=validate -o /medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/validate.$JOB_ID.log submit/validate_asymmetric_pilot.sh
+qsub_time    10/23/2026 14:45:22.173
+start_time   10/23/2026 14:45:22.664
+end_time     10/23/2026 14:45:27.648
+granted_pe   smp
+slots        2
+failed       0
+deleted_by   NONE
+exit_status  1
+ru_wallclock 4.984
+ru_utime     1.350
+ru_stime     0.332
+ru_maxrss    80100
+ru_ixrss     0
+ru_ismrss    0
+ru_idrss     0
+ru_isrss     0
+ru_minflt    54494
+ru_majflt    414
+ru_nswap     0
+ru_inblock   94928
+ru_oublock   80
+ru_msgsnd    0
+ru_msgrcv    0
+ru_nsignals  0
+ru_nvcsw     8614
+ru_nivcsw    18
+wallclock    5.400
+cpu          1.682
+mem          0.000
+io           0.023
+iow          0.000
+ioops        3804
+maxvmem      38.047M
+maxrss       0.000
+maxpss       0.000
+arid         undefined
+jc_name      NONE
+==============================================================
+qname        broad
+hostname     uger-rh8-d007.broadinstitute.org
+group        broad
+owner        jjiahao
+project      broad
+department   defaultdepartment
+jobname      csm_asym_v2
+jobnumber    62581444
+taskid       undefined
+account      sge
+priority     0
+cwd          NONE
+submit_host  login04.broadinstitute.org
+submit_cmd   qsub -terse -v PROJECT_ROOT=/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq,RUN_DIR=/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/attempt2,FIXTURE_DIR=/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/tests/fixtures/asymmetric_pilot_v2,MODE=validate -o /medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/output/asymmetric_pilot_v2_20261023/validate.$JOB_ID.log submit/validate_asymmetric_pilot.sh
+qsub_time    10/23/2026 14:46:51.091
+start_time   10/23/2026 14:46:51.654
+end_time     10/23/2026 14:47:26.072
+granted_pe   smp
+slots        2
+failed       0
+deleted_by   NONE
+exit_status  0
+ru_wallclock 34.418
+ru_utime     19.751
+ru_stime     2.861
+ru_maxrss    245436
+ru_ixrss     0
+ru_ismrss    0
+ru_idrss     0
+ru_isrss     0
+ru_minflt    623145
+ru_majflt    60
+ru_nswap     0
+ru_inblock   9888
+ru_oublock   5128
+ru_msgsnd    0
+ru_msgrcv    0
+ru_nsignals  0
+ru_nvcsw     45199
+ru_nivcsw    951
+wallclock    34.904
+cpu          22.612
+mem          1.380
+io           5.189
+iow          0.050
+ioops        78839
+maxvmem      1.077G
+maxrss       0.000
+maxpss       0.000
+arid         undefined
+jc_name      NONE
