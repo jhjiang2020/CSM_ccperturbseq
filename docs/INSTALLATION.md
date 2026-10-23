@@ -141,17 +141,16 @@ Configure the executable literally in your run YAML:
 ```yaml
 gex_alignment:
   backend: kallisto
+  gene_assignment: unique
   umi_correction: parse
+  output_level: gene
   kallisto:
     executable: /medpop/rgupta/Jiahao/conda/envs/csm_kallisto-share/bin/kallisto
-    reference_dir: /absolute/path/to/your/validated/kallisto_reference
-    gene_assignment: unique
-    output_level: gene
+    reference_dir: /medpop/rgupta/Jiahao/reference_genome/kallisto_refdata-gex-GRCh38-2024-A_nac_20261023
 ```
 
-The reference path above is a placeholder to replace, not a supplied new lab
-reference. Build one or reuse an explicitly validated, readable existing
-reference. For building, use this prefix's `bin/kb` together with its explicit
+The reference above is the published lab reference described below. For building
+another reference, use this prefix's `bin/kb` together with its explicit
 `bin/kallisto`; kb-python also bundles an older kallisto, which is not the pinned
 0.52.0 runtime. The repository builder forwards `--kallisto` explicitly.
 
@@ -166,6 +165,94 @@ a sealed tools prefix, validates the production environment without modifying
 it, and grants `rguptalab` read/execute access only in the new tools tree.
 `CSM_VALIDATE_ONLY=true` resumes validation of a built, unsealed prefix; it is not
 an in-place environment upgrade.
+
+### Shared GRCh38 kallisto reference
+
+The lab reference published on **2026-10-23** is:
+
+```text
+/medpop/rgupta/Jiahao/reference_genome/kallisto_refdata-gex-GRCh38-2024-A_nac_20261023
+```
+
+It is a fresh build with the shared kallisto **0.52.0** executable and
+kb-python **0.29.5**, using workflow **`nac`** and Parse genome label **`hg38`**.
+It contains **226,005 mature transcript targets**, **38,606 nascent targets**
+and **38,606 genes**. It does not depend on a project output directory remaining
+available. The earlier benchmark reference matches the source release but
+failed index-loading checks with the shared Conda executable, so its index was
+not reused. Both executables report 0.52.0; the version string alone did not
+establish compatibility.
+
+The matching Parse reference is
+`/medpop/rgupta/Jiahao/reference_genome/parse_refdata-gex-GRCh38-2024-A`.
+Its saved `process/mkref_def.json` and build log identify these exact inputs:
+
+| Input | Shared path |
+| --- | --- |
+| FASTA | `/medpop/rgupta/Jiahao/reference_genome/refdata-gex-GRCh38-2024-A/fasta/genome.fa` |
+| GTF | `/medpop/rgupta/Jiahao/reference_genome/refdata-gex-GRCh38-2024-A/genes/genes.gtf.gz` |
+
+This is the 10x **GRCh38 2024-A** reference, using its filtered **GENCODE v44**
+annotation. The source and published index checksums are:
+
+```text
+FASTA SHA256  fb7421217e7058120cd60a5277445198e8deef2dff1edc46cd1e98b31fe64cbb
+GTF SHA256    f589e2e8f31221c715548a84b1db12797624ce9f40c371d1544e5116962d5139
+index.idx SHA256  6cf01de62ac69d29dbb73cdef567d20ef348faf28f2001bf8658533d157ac4b0
+```
+
+Validation checks the artifact and source checksums, matches all **194** source
+chromosomes to the actual Parse STAR genome sequence, and compares the gene
+universe, genome labels and GTF gene/exon coordinates with Parse, including
+**483,352 retained exon-start entries**. It also reads the copied index with the
+shared executable and maps **12** synthetic source exon/intron reads back to their
+expected genes. `reference.json` records runtime-asset checksums;
+`shared_reference.complete.json` records the source/Parse/tool identities,
+validation results, build/publication jobs and ownership. The reference contains the
+validation script, index-inspection log, executable-comparison logs and smoke-test
+inputs/outputs.
+
+The published tree is owned by **`jjiahao:rguptalab`**: directories are **0750**
+and files **0640**. Lab members can read files and traverse directories; only
+the owner can write. Group write permission is also removed from the parent
+`reference_genome/`, preventing replacement or renaming of the protected tree.
+Existing reference contents and benchmark outputs are unchanged. Future builds
+should use a new destination rather than replace this dated reference.
+
+An authorized rgupta user can use this complete dependency configuration in
+their own run YAML:
+
+```yaml
+environment:
+  conda_prefix: /medpop/rgupta/Jiahao/conda/envs/splitpipe-share
+  conda_env: /medpop/rgupta/Jiahao/conda/envs/splitpipe-share
+paths:
+  splitpipe_dir: /medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/ParseBiosciences-Pipeline.1.6.4
+  genome_dir: /medpop/rgupta/Jiahao/reference_genome/parse_refdata-gex-GRCh38-2024-A
+gex_alignment:
+  backend: kallisto
+  gene_assignment: unique       # or fractional
+  umi_correction: parse         # or directional / none
+  output_level: gene
+  count_threads: 0
+  kallisto:
+    executable: /medpop/rgupta/Jiahao/conda/envs/csm_kallisto-share/bin/kallisto
+    reference_dir: /medpop/rgupta/Jiahao/reference_genome/kallisto_refdata-gex-GRCh38-2024-A_nac_20261023
+    strand: forward
+```
+
+Merge these fields into a copied project config; retain its other required
+fields and set your own checkout, inputs, output and log directories. Pipeline
+Python stays in `splitpipe-share`; the kallisto binary is invoked by absolute
+path. No kallisto module or separate interactive activation is required. Users
+with an existing production `splitpipe` installation may retain its environment
+settings and use the same shared executable/reference paths.
+
+The Broad `use .kallisto-0.45.0` and `use .kallisto-0.46.0` modules are older
+than this validated stack. Kallisto 0.50 introduced an incompatible index format
+and BUS strand-selection options used by the pipeline; those modules are not
+substitutes for the 0.52.0 runtime and reference. See the
+[upstream 0.50 release notes](https://github.com/pachterlab/kallisto/releases/tag/v0.50.0).
 
 ## Parse reference for both backends
 
@@ -196,6 +283,27 @@ files and build logs. Use the resulting reference directory as
 submission graph.
 
 ## Optional kallisto tools and reference
+
+You can choose tools and references independently:
+
+| Preference | Setup |
+| --- | --- |
+| Own kallisto, shared reference | Install the pinned tools below; set `kallisto.executable` to your absolute `bin/kallisto` and retain the shared `reference_dir`. |
+| Shared kallisto, own reference | Build with the shared companion's `bin/kb` and explicit `bin/kallisto`; write the new reference in your own writable storage. |
+| Own tools and reference | Use the installation and build recipe below, then configure both absolute paths. |
+
+Before using a shared index with a different executable build, run
+`"${KALLISTO}" inspect -t 8 "${KALLISTO_REFERENCE}/index.idx"` in a compute
+allocation, with those variables set to your binary and the shared reference.
+If it cannot read the index, build a personal reference with that executable.
+
+When reusing the lab Parse reference, build from the exact FASTA/GTF paths and
+`hg38` label listed above. A different assembly/annotation requires its matching
+Parse reference too. A bare kallisto index or an arbitrary downloaded reference
+does not supply this pipeline's required `reference.json`, `features.tsv` and
+canonical gene mapping; use `scripts/build_kallisto_reference.py` to create the
+complete contract. Shared reference files require no edits when changing
+unique/fractional assignment or UMI correction.
 
 Install the pinned optional tools separately, in your own writable prefix:
 

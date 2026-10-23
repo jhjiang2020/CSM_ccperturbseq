@@ -36,7 +36,11 @@ is optional for pipeline execution.
 [Install Parse 1.6.4 and `requirements_extra.txt`](INSTALLATION.md#own-production-environment)
 in the production `splitpipe` environment, or configure the shared prefix.
 Kallisto users can use the [published shared companion](INSTALLATION.md#shared-kallisto-companion-published-2026-10-22),
+and [matching shared GRCh38 reference](INSTALLATION.md#shared-grch38-kallisto-reference),
 or create the [separate tools environment and reference](INSTALLATION.md#optional-kallisto-tools-and-reference).
+Tools and references may be mixed: a compatible personal kallisto 0.52.0 build
+can use the shared reference, or the shared executable can build/use your own
+matching reference. Check index compatibility as described in the installation guide.
 Keep the Parse distribution pristine.
 
 ## 3. Make your run configuration

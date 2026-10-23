@@ -125,6 +125,12 @@ gex_alignment:
 | `strand` | `forward` | `forward`, `reverse` or `unstranded`, according to the assay. |
 | `cell_umi_threshold` | `null` | Initialized Parse automatic cell calling; a positive number explicitly fixes the cutoff. |
 
+For rgupta users, the [shared GRCh38 setup](INSTALLATION.md#shared-grch38-kallisto-reference)
+provides exact production-environment, executable and reference paths. The
+[personal installation options](INSTALLATION.md#optional-kallisto-tools-and-reference)
+also cover mixing a shared reference with your own tools, or shared tools with
+your own reference.
+
 Legacy nested policy keys remain accepted; conflicting common/nested values
 are rejected. See [counting choices](GEX_COUNTING.md) for STAR fractional BAM
 requirements and the Parse/Tony settings comparison.

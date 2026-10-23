@@ -68,8 +68,11 @@ Build from the same genome FASTA and GTF release used by the Parse reference.
 `--genome` must equal its genome label. The default `nac` reference includes
 mature transcripts and nascent targets, retaining intronic sensitivity.
 
-See the [reference-build recipe](INSTALLATION.md#optional-kallisto-tools-and-reference)
-for a self-contained build or the optional shared tools prefix. The production
+Authorized rgupta users can reuse the
+[published GRCh38 2024-A reference and exact shared configuration](INSTALLATION.md#shared-grch38-kallisto-reference).
+It matches the lab Parse reference and is read-only for lab members other than
+its owner. See the [reference-build recipe](INSTALLATION.md#optional-kallisto-tools-and-reference)
+for a personal build or mixed shared/personal tools and references. The production
 job must be able to execute the configured binary: activating a separate tools
 environment interactively does not place it on a later production job's PATH.
 Both backends still require `paths.genome_dir` to identify the Parse reference.

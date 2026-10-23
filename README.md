@@ -62,7 +62,9 @@ environment:
 ```
 
 The [shared setup](docs/INSTALLATION.md#optional-shared-rgupta-setup) also lists
-the validated dated kallisto companion and optional lab references. Configure
+the validated kallisto companion and the
+[matching shared GRCh38 reference](docs/INSTALLATION.md#shared-grch38-kallisto-reference),
+with exact run-config paths and lab read-only permissions. Configure
 your own writable project, output and logs; the shared environment is a
 dependency. Without shared-folder access, follow the own-installation route.
 
