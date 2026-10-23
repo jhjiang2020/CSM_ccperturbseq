@@ -353,6 +353,15 @@ def validate(config_path, only_library=None, verify_bam_hashes=True):
                 errors.append(f"{name}: native kallisto handoff is invalid: {exc}")
             manifests.append(path)
             continue
+        try:
+            try:
+                from scripts.gex_alignment import backend_options, uses_shared_counter, validate_completion
+            except ModuleNotFoundError:
+                from gex_alignment import backend_options, uses_shared_counter, validate_completion
+            if uses_shared_counter(backend_options(config)):
+                validate_completion(config, config_path, name, verify_outputs=False)
+        except (OSError, ValueError, KeyError) as exc:
+            errors.append(f"{name}: fractional STAR handoff is invalid: {exc}")
         harmonized_path = (
             run_root / "process" / "csm_harmonized_bam.complete.json"
         )

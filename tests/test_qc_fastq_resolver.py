@@ -39,7 +39,8 @@ class QcFastqResolverTest(unittest.TestCase):
             capture_output=True,
             check=True,
         ).stdout
-        self.assertIn("Aggregate: qsub submit_", aggregate)
+        self.assertIn("Aggregate command:", aggregate)
+        self.assertIn("submit_qc_gex_grna_contamination_aggregate.sh", aggregate)
         self.assertNotIn("Array command:", aggregate)
 
     def test_production_qc_aggregates_one_four_and_twelve_libraries(self):

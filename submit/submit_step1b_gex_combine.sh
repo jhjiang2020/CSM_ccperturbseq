@@ -95,10 +95,11 @@ done
 python3 "${SCRIPTS_DIR}/validate_gex_filter_manifests.py" --config "${CONFIG}"
 
 GEX_ALIGNMENT_BACKEND=$(python3 "${SCRIPTS_DIR}/gex_alignment.py" --config "${CONFIG}")
-if [[ "${GEX_ALIGNMENT_BACKEND}" == "kallisto" ]]; then
+GEX_SHARED_COUNTER=$(python3 "${SCRIPTS_DIR}/gex_alignment.py" --config "${CONFIG}" --field shared_counter)
+if [[ "${GEX_SHARED_COUNTER}" == "true" ]]; then
     export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
     python3 "${SCRIPTS_DIR}/combine_kallisto_gex.py" --config "${CONFIG}"
-    echo "Step 1b kallisto complete: $(date)"
+    echo "Step 1b ${GEX_ALIGNMENT_BACKEND} sparse combine complete: $(date)"
     exit 0
 fi
 

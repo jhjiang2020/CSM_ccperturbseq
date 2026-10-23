@@ -147,15 +147,20 @@ flowchart TD
     PRE --> SURV[Corrected survivor FASTQ]
     PRE -. compact guide evidence .-> ID[Optional Step 1c]
     SURV --> CHOICE{gex_alignment.backend}
-    CHOICE -->|star: default| STAR[STAR → Parse molecules/DGE]
+    CHOICE -->|star| STAR[STAR name-sorted BAM]
+    STAR --> POLICY{gene_assignment}
+    POLICY -->|unique: default| PARSE[Parse molecules/DGE]
+    POLICY -->|fractional| NATIVE
     CHOICE -->|kallisto| BUS[kallisto BUS equivalence classes]
-    BUS --> NATIVE[Native gene resolution + UMI families]
+    BUS --> NATIVE[Shared candidate resolution + UMI families]
     NATIVE --> OUTPUT[Sparse matrices, metadata, H5AD]
-    STAR --> OUTPUT
+    PARSE --> OUTPUT
     OUTPUT --> COMB[Step 1b: matching backend combine]
 ```
 
-The defaults are `backend: star`, `umi_correction: parse`. On either backend:
+The defaults are `backend: star`, `gene_assignment: unique`,
+`umi_correction: parse`. Both aligners accept unique/fractional gene assignment.
+[Settings and Parse/Tony comparison](GEX_COUNTING.md). On either backend:
 
 | Flavor | GEX neighbor correction |
 | --- | --- |
@@ -163,15 +168,20 @@ The defaults are `backend: star`, `umi_correction: parse`. On either backend:
 | `directional` | Fixed-count Hamming-one graph using `n_high >= 2*n_low - 1`, with bustools-compatible traversal. |
 | `none` | Exact UMI grouping only; no merging between different UMI strings. |
 
-These settings do not change Step 4 gRNA correction. With STAR, the default
+These settings do not change Step 4 gRNA correction. With unique STAR, the default
 kernel is original Parse; alternative flavors override its function in memory.
 With kallisto, `run_kallisto_gex.py` consumes native BUS evidence and retains
 Parse's initialized sample masks and cell-calling algorithm through a runtime
 DGE callback. It never projects pseudoalignments into a BAM for gene counting.
 
-Kallisto defaults to unique gene assignment. Optional fractional assignment
+Fractional STAR uses `run_star_fractional.py` before native molinfo discards
+secondary hits; its NH checks require all alignments in the sorted BAM. Both
+adapters use `gex_counting.py` and `gex_runtime.py` for molecule counting, Parse
+initialization, sample output and completion.
+
+Both aligners default to unique gene assignment. Optional fractional assignment
 resolves compatible candidate genes and apportions unresolved molecules equally.
-`output_level: both` adds a target matrix while keeping genes primary;
+For kallisto, `output_level: both` adds a target matrix while keeping genes primary;
 `transcript` selects targets as the primary expression matrix. Whole gene-molecule
 totals drive cell calling, with fractional roundoff excluded from cutoffs.
 Molecules with unresolved target intersections may still have valid gene counts.

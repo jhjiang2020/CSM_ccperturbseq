@@ -84,7 +84,8 @@ design:
 
 # --- GEX alignment backend (existing configurations default to STAR) ---
 gex_alignment:
-  backend: "star"  # Optional kallisto settings: docs/KALLISTO_BACKEND.md
+  backend: "star"  # Backend/tool settings: docs/GEX_COUNTING.md
+  gene_assignment: "unique"  # unique or fractional; applies to STAR and kallisto
   # umi_correction: "parse"  # parse (default), directional, none; applies to STAR and kallisto
 
 # --- Parse Biosciences split-pipe settings ---

@@ -114,13 +114,14 @@ python scripts/03_match_grna_ibar.py --config "${CONFIG}" \
 Review orientation/length warnings before a large run. The check diagnoses the
 reference; it does not repair it. [Details](SCALABILITY_AND_PREFLIGHT.md).
 
-## 5. Select the GEX backend and UMI policy
+## 5. Select the GEX backend, assignment and UMI policy
 
 For the default workflow:
 
 ```yaml
 gex_alignment:
   backend: star
+  gene_assignment: unique
   umi_correction: parse
 ```
 
@@ -129,13 +130,13 @@ For native kallisto, replace that section with:
 ```yaml
 gex_alignment:
   backend: kallisto
+  gene_assignment: unique
   umi_correction: parse
+  output_level: gene
+  count_threads: 0
   kallisto:
     executable: kallisto
     reference_dir: references/kallisto_GRCh38
-    gene_assignment: unique
-    output_level: gene
-    count_threads: 0
 ```
 
 Set `executable` to the absolute kallisto binary in your tools environment when
@@ -144,10 +145,10 @@ to the YAML file; it must contain the manifest produced by the repository's
 reference builder. A plain kallisto index alone is insufficient.
 
 `parse`, `directional` and `none` are available on **both** backends. Fractional
-gene assignment and transcript output are kallisto options. Use
+gene assignment is available on both aligners; transcript output requires kallisto. Use
 `output_level: both` to keep genes primary while also exporting transcript/target
 counts. `output_level: transcript` changes the primary expression feature level.
-[Counting semantics and output limitations](KALLISTO_BACKEND.md).
+[Counting choices, Parse defaults and Tony’s workflow](GEX_COUNTING.md).
 
 ## 6. Decide whether to remove gRNA carry-over from GEX
 

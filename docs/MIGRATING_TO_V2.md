@@ -26,7 +26,7 @@ using an accessible validated production prefix without modifying it.
 | Keep STAR/Parse counts and only use later guide/QC work | Retain that policy explicitly and validate the existing output before reuse. Legacy unmarked STAR output is supported only for Parse-default correction. |
 | Select `directional` or `none` for STAR GEX | New output root; rerun molecule processing through the current Step 1 wrapper and rebuild Step 1b/5. Do not relabel the old matrix. |
 | Select kallisto | Keep Parse preprocessing/reference; build a matching kallisto reference and run fresh Step 1a/1b. No historical STAR BAM is consumed by this backend. |
-| Select fractional genes | Treat it as a distinct quantification policy; preserve floats and compare explicitly against unique-gene counts. |
+| Select fractional genes on either aligner | Treat it as a distinct quantification policy; preserve floats and compare explicitly against unique-gene counts. |
 | Need transcript output alongside standard analysis | Prefer `output_level: both`; gene counts stay primary. |
 | Select primary transcript output | Check downstream feature assumptions. Gene-target QC and integer/gene-only methods may require the gene product instead. |
 | Old guide arm already complete | Recreate or carefully validate/copy compatible guide products into the new namespace before Step 5; do not point new outputs over the historical run. |
@@ -34,6 +34,13 @@ using an accessible validated production prefix without modifying it.
 A change only to count worker number is an execution change, but config identity
 checks can still require a fresh validated count run. Changing reference,
 backend, UMI correction or assignment semantics is a scientific change.
+
+Move common assignment/output/count-thread policies to `gex_alignment` when
+editing configs. Historical `kallisto` nested keys remain valid; contradictory
+values at both levels are rejected. STAR fractional counting requires the
+complete sorted BAM before molinfo drops secondary hits; the annotated BAM
+cannot reconstruct missing alternatives.
+[Counting choices and Parse/Tony presets](GEX_COUNTING.md).
 
 ## Keep comparison inputs matched
 

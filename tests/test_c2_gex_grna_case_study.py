@@ -4,6 +4,7 @@
 import gzip
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -12,6 +13,7 @@ import unittest
 from pathlib import Path
 
 import pandas as pd
+from PIL import Image
 
 from scripts.c2_gex_grna_case_study import (
     IBAR_LENGTH,
@@ -41,6 +43,21 @@ from scripts.c2_gex_grna_case_study import (
     summarize_positions,
     write_deterministic_dataframe,
 )
+
+
+def rendered_asset_identity(path):
+    """Exact rendered content, independent of compression and opaque SVG IDs."""
+    if path.suffix == ".png":
+        with Image.open(path) as image:
+            return image.mode, image.size, image.info, image.tobytes()
+    if path.suffix == ".svg":
+        text = path.read_text()
+        names = dict.fromkeys(re.findall(r'\bid="([pm][0-9a-f]{10})"', text))
+        for index, name in enumerate(names):
+            stable = f"csm_matplotlib_id_{index}"
+            text = text.replace(f'id="{name}"', f'id="{stable}"').replace(f'#{name}', f'#{stable}')
+        return text
+    return path.read_bytes()
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -113,6 +130,29 @@ class RepresentativeSelectionTest(unittest.TestCase):
 
 
 class SmallHelperTest(unittest.TestCase):
+    def test_render_identity_retains_exact_pixels_and_vector_geometry(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            old_png, new_png = root / "old.png", root / "new.png"
+            image = Image.new("RGBA", (2, 2), (255, 0, 0, 255))
+            image.save(old_png, compress_level=0)
+            image.save(new_png, compress_level=9)
+            self.assertNotEqual(old_png.read_bytes(), new_png.read_bytes())
+            self.assertEqual(rendered_asset_identity(old_png), rendered_asset_identity(new_png))
+            image.putpixel((1, 1), (254, 0, 0, 255))
+            image.save(new_png)
+            self.assertNotEqual(rendered_asset_identity(old_png), rendered_asset_identity(new_png))
+            old_svg, new_svg = root / "old.svg", root / "new.svg"
+            old_text = '<svg><defs><path id="m0000000001" d="M0 0L1 1"/></defs><use href="#m0000000001"/></svg>'
+            old_svg.write_text(old_text)
+            renamed = old_text.replace("m0000000001", "m0000000002")
+            new_svg.write_text(renamed)
+            self.assertEqual(rendered_asset_identity(old_svg), rendered_asset_identity(new_svg))
+            new_svg.write_text(renamed.replace("L1 1", "L2 1"))
+            self.assertNotEqual(rendered_asset_identity(old_svg), rendered_asset_identity(new_svg))
+            new_svg.write_text(renamed.replace('href="#m0000000002"', 'href="#m0000000003"'))
+            self.assertNotEqual(rendered_asset_identity(old_svg), rendered_asset_identity(new_svg))
+
     def test_splitpipe_exact_tso_trim(self):
         sequence = TSO + "G" * 20 + "TTTT"
         trimmed, index = splitpipe_trim(sequence)
@@ -317,8 +357,8 @@ class SmallHelperTest(unittest.TestCase):
             ]
             for relative in expected:
                 self.assertEqual(
-                    (ROOT / "docs" / relative).read_bytes(),
-                    (rendered / relative).read_bytes(),
+                    rendered_asset_identity(ROOT / "docs" / relative),
+                    rendered_asset_identity(rendered / relative),
                     str(relative),
                 )
 

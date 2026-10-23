@@ -564,7 +564,9 @@ class ConfigurationTests(unittest.TestCase):
                 contract.check_output_backend({"backend": "star"}, process)
 
     def test_star_is_default_and_options_are_validated(self):
-        self.assertEqual(contract.backend_options({}), {"backend": "star", "umi_correction": "parse"})
+        defaults = contract.backend_options({})
+        self.assertEqual((defaults["backend"], defaults["umi_correction"], defaults["gene_assignment"]),
+                         ("star", "parse", "unique"))
         options = contract.backend_options({"gex_alignment": {"backend": "kallisto", "kallisto": {"reference_dir": "ref"}}})
         self.assertEqual((options["output_level"], options["gene_assignment"]), ("gene", "unique"))
         with self.assertRaises(ValueError):

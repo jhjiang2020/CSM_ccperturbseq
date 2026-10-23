@@ -172,8 +172,12 @@ molecule read support and optional fractional gene weights. Genomic BAMs and
 exonic fractions are not fabricated for this backend. H5AD provenance records
 the feature level and counting policy.
 
-New STAR runs have `process/gex_umi_policy.json` and a combined policy marker.
-Legacy unmarked STAR outputs are accepted only with Parse-default correction.
+Unique STAR runs have `process/gex_umi_policy.json` and a combined policy marker.
+Fractional STAR uses `process/star.complete.json`, `process/star_qc.json` and
+`gex_combined/star.complete.json`. Its complete pre-molinfo BAM is retained and
+bound to provenance; it uses the shared sparse combine.
+[Counting choices and BAM requirements](GEX_COUNTING.md).
+Legacy unmarked STAR outputs are accepted only with unique genes and Parse-default correction.
 The filter has a separate `rejected_pairs.complete.json`; Step 1c also has its
 own validated completion artifacts. Keep these with the output files.
 
@@ -185,7 +189,7 @@ python scripts/validate_gex_filter_manifests.py --config "${CSM_CONFIG}"
 ```
 
 Step 1b already runs it, and Step 5 validates the combined expression contract.
-For STAR, `python scripts/gex_alignment.py --config "${CSM_CONFIG}"
+For unique STAR, `python scripts/gex_alignment.py --config "${CSM_CONFIG}"
 --validate-star-policies` additionally checks per-library policy/output identity.
 Do not create marker files manually to bypass a failed validation.
 

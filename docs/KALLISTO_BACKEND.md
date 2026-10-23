@@ -1,4 +1,7 @@
-# Kallisto GEX backend and UMI correction — v2.0
+# GEX backends and shared molecule counting — v2.0
+
+For the twelve gene-counting combinations, STAR BAM requirements and
+Parse-default/Tony settings, see [Step 1a counting choices](GEX_COUNTING.md).
 
 Start with the [quick start](QUICKSTART.md), [installation guide](INSTALLATION.md)
 and [configuration reference](CONFIGURATION.md). Shared lab storage is optional.
@@ -18,14 +21,14 @@ Use a new `paths.output_dir` when changing backends. Old configurations without
 ```yaml
 gex_alignment:
   backend: kallisto
-  umi_correction: parse             # parse (default), directional, or none; also applies to STAR
+  gene_assignment: unique
+  umi_correction: parse
+  output_level: gene
+  count_threads: 0             # 0 uses allocated cores; 1 runs serially
+  transcript_assignment: fractional
   kallisto:
     executable: kallisto  # Or an absolute path in your separate tools prefix.
     reference_dir: references/kallisto_GRCh38
-    count_threads: 0  # 0 uses the allocated --threads; 1 forces serial counting
-    output_level: gene              # gene (default), both, or transcript
-    gene_assignment: unique         # unique (default) or fractional
-    transcript_assignment: fractional  # fractional or unique
     strand: forward                 # forward, reverse, or unstranded
     cell_umi_threshold: null         # null: initialized Parse cell calling
 ```
@@ -99,18 +102,20 @@ gene policy below is therefore still distinct from running the complete
 bustools workflow. The gRNA code keeps its existing greedy traversal; sharing
 the directional inequality does not make the two traversals identical.
 
-STAR uses its original kernel for `parse`. The other modes replace only its
+The native unique STAR path uses its original kernel for `parse`. The other modes replace only its
 in-memory `collapse_polyN` function through the existing runtime wrapper,
 including forked molecule workers. No vendor source changes occur. Use a new
 output directory when changing STAR correction policy, since native Parse can
 otherwise reuse existing molecule files. Policy manifests prevent mixing
 choices at Step 1b or labelling an old combined matrix with a new policy.
 
-STAR policy records are `process/gex_umi_policy.json` and
+Native unique STAR policy records are `process/gex_umi_policy.json` and
 `gex_combined/gex_umi_policy.json`. Kallisto records the choice in its existing
 completion manifests and H5AD provenance. Step 5 records the common choice as
 `ccperturbseq_pipeline.gex_umi_correction`. Historical STAR outputs without a
-policy record remain usable with the default Parse choice.
+policy record remain usable with unique genes and the default Parse choice.
+Fractional STAR instead uses `star.complete.json` manifests and the shared
+sparse counting/combine implementation; see [STAR fractional assignment](GEX_COUNTING.md#star-fractional-assignment).
 
 Preprocessed headers provide corrected barcode sequences, barcode indices,
 physical-well identity, RT primer type and UMI. No second barcode correction or
@@ -247,9 +252,9 @@ reference built from the Parse GRCh38-2024-A FASTA/GTF is available at
 the source and runtime checksums. This is a full reference, independent of the
 10-million-pair read sampling.
 
-The custom molecule counter uses disk-backed, complete-barcode shards across
-the allocated threads. `kallisto.count_threads` can cap the worker count (0 uses
-all allocated threads; 1 runs serially). The counter caches EC/gene annotations
+The shared STAR-fractional/kallisto molecule counter uses disk-backed, complete-barcode shards across
+the allocated threads. `gex_alignment.count_threads` can cap the worker count
+(0 uses all allocated threads; 1 runs serially). The legacy kallisto key is accepted. The counter caches EC/gene annotations
 and merges shards in original barcode order, preserving molecule assignments
 and fractional-weight accumulation exactly. Each Parse-corrected UMI group
 retains the installed Parse kernel parity check. Threads are reused sequentially

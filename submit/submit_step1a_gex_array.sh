@@ -101,6 +101,7 @@ OUT_SUBLIB="${OUTPUT_DIR}/gex_${LIB_NAME}"
 GEX_ALIGNMENT_BACKEND=$(python3 "${SCRIPTS_DIR}/gex_alignment.py" \
     --config "${CONFIG}" --library "${LIB_NAME}" --check-output)
 GEX_UMI_CORRECTION=$(python3 -c "import yaml; cfg=yaml.safe_load(open('${CONFIG}')); print((cfg.get('gex_alignment') or {}).get('umi_correction', 'parse'))")
+GEX_GENE_ASSIGNMENT=$(python3 "${SCRIPTS_DIR}/gex_alignment.py" --config "${CONFIG}" --field gene_assignment)
 
 if [[ "${EXISTING_ALIGNMENT_ENABLED}" == "True" ]]; then
     SOURCE_SUBLIB=$(python3 -c "import yaml; cfg=yaml.safe_load(open('${CONFIG}')); section=cfg['gex_decontamination']['existing_alignment']; print(section.get('source_output_dir_template', '{output_dir}/gex_{library}').format(output_dir=cfg['paths']['output_dir'], library='${LIB_NAME}'))")
@@ -188,10 +189,8 @@ if [[ "${GEX_DECONTAM_ENABLED}" == "True" ]]; then
     export CSM_GEX_DECONTAM_INPUT_MANIFEST="${INPUT_IDENTITY}"
 fi
 
-if [[ "${GEX_ALIGNMENT_BACKEND}" == "kallisto" ]]; then
-    # Retain Parse preprocessing; native BUS counting supplies the DGE contract.
-    export PYTHONDONTWRITEBYTECODE=1
-    export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+# Both aligners consume exactly the same Parse preprocessing contract.
+run_preprocessing() {
     run_splitpipe \
         --mode pre --one_step \
         --kit "${KIT}" \
@@ -203,6 +202,31 @@ if [[ "${GEX_ALIGNMENT_BACKEND}" == "kallisto" ]]; then
         --sample "${SAMPLE_NAME}" "${SAMPLE_WELLS}" \
         --nthreads "${NSLOTS:-16}" \
         ${EXTRA_FLAGS}
+}
+
+run_star_quantification() {
+    if [[ "${GEX_GENE_ASSIGNMENT}" == "fractional" ]]; then
+        python3 "${SCRIPTS_DIR}/run_star_fractional.py" \
+            --config "${CONFIG}" --library "${LIB_NAME}" --threads "${NSLOTS:-16}"
+    else
+        run_splitpipe --mode mol --output_dir "${OUT_SUBLIB}" \
+            --nthreads "${NSLOTS:-16}" --save_anndata ${EXTRA_FLAGS}
+    fi
+}
+
+STAR_EXTRA_ARGS=()
+if [[ "${GEX_ALIGNMENT_BACKEND}" == "star" ]]; then
+    MAX_MULTIMAPS=$(python3 "${SCRIPTS_DIR}/gex_alignment.py" --config "${CONFIG}" --field max_multimaps)
+    STAR_EXTRA_ARGS=("--star_extra_args=--outFilterMultimapNmax,${MAX_MULTIMAPS},--outSAMmultNmax,-1")
+fi
+
+echo "GEX counting: ${GEX_ALIGNMENT_BACKEND} + ${GEX_GENE_ASSIGNMENT} + ${GEX_UMI_CORRECTION}"
+
+if [[ "${GEX_ALIGNMENT_BACKEND}" == "kallisto" ]]; then
+    # Retain Parse preprocessing; native BUS counting supplies the DGE contract.
+    export PYTHONDONTWRITEBYTECODE=1
+    export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+    run_preprocessing
     python3 "${SCRIPTS_DIR}/run_kallisto_gex.py" \
         --config "${CONFIG}" --library "${LIB_NAME}" --threads "${NSLOTS:-16}"
     echo "Step 1a kallisto complete for ${LIB_NAME}: $(date)"
@@ -219,9 +243,11 @@ if [[ "${EXISTING_ALIGNMENT_ENABLED}" == "True" ]]; then
         exit 1
     fi
     SOURCE_BAM=""
-    for candidate in \
-        "${SOURCE_SUBLIB}/process/barcode_headAligned_anno.bam" \
-        "${SOURCE_SUBLIB}/process/barcode_headAligned_sorted.bam"; do
+    SOURCE_CANDIDATES=("${SOURCE_SUBLIB}/process/barcode_headAligned_sorted.bam")
+    if [[ "${GEX_GENE_ASSIGNMENT}" == "unique" ]]; then
+        SOURCE_CANDIDATES=("${SOURCE_SUBLIB}/process/barcode_headAligned_anno.bam" "${SOURCE_CANDIDATES[@]}")
+    fi
+    for candidate in "${SOURCE_CANDIDATES[@]}"; do
         if [[ -f "${candidate}" ]]; then
             SOURCE_BAM="${candidate}"
             break
@@ -246,17 +272,7 @@ if [[ "${EXISTING_ALIGNMENT_ENABLED}" == "True" ]]; then
 
     # Re-run only preprocessing in the new sandbox to obtain the same positive
     # QNAME evidence and filtered barcode_head FASTQ. STAR is not rerun.
-    run_splitpipe \
-        --mode pre --one_step \
-        --kit "${KIT}" \
-        --chemistry "${CHEMISTRY}" \
-        --genome_dir "${GENOME_DIR}" \
-        --fq1 "${FQ1_FILES[@]}" \
-        --fq2 "${FQ2_FILES[@]}" \
-        --output_dir "${OUT_SUBLIB}" \
-        --sample "${SAMPLE_NAME}" "${SAMPLE_WELLS}" \
-        --nthreads "${NSLOTS:-16}" \
-        ${EXTRA_FLAGS}
+    run_preprocessing
 
     python3 "${SCRIPTS_DIR}/gex_grna_bam_filter.py" \
         --source-bam "${SOURCE_BAM}" \
@@ -266,13 +282,15 @@ if [[ "${EXISTING_ALIGNMENT_ENABLED}" == "True" ]]; then
         --library "${LIB_NAME}" \
         --backend "${BAM_BACKEND}"
 
-    # The sandbox now satisfies split-pipe's ordinary mol input contract.
-    run_splitpipe \
-        --mode mol \
-        --output_dir "${OUT_SUBLIB}" \
-        --nthreads "${NSLOTS:-16}" \
-        --save_anndata \
-        ${EXTRA_FLAGS}
+    # Fractional counting must run before Parse molinfo drops secondary hits.
+    run_star_quantification
+elif [[ "${GEX_GENE_ASSIGNMENT}" == "fractional" ]]; then
+    run_preprocessing
+    run_splitpipe --mode align --one_step --output_dir "${OUT_SUBLIB}" \
+        --nthreads "${NSLOTS:-16}" "${STAR_EXTRA_ARGS[@]}" ${EXTRA_FLAGS}
+    run_splitpipe --mode post --one_step --output_dir "${OUT_SUBLIB}" \
+        --nthreads "${NSLOTS:-16}" ${EXTRA_FLAGS}
+    run_star_quantification
 else
     run_splitpipe \
         --mode all \
@@ -285,7 +303,12 @@ else
         --sample "${SAMPLE_NAME}" "${SAMPLE_WELLS}" \
         --nthreads "${NSLOTS:-16}" \
         --save_anndata \
+        "${STAR_EXTRA_ARGS[@]}" \
         ${EXTRA_FLAGS}
+
+fi
+
+if [[ "${EXISTING_ALIGNMENT_ENABLED}" != "True" ]]; then
     if [[ "${GEX_DECONTAM_ENABLED}" == "True" ]]; then
         python3 "${SCRIPTS_DIR}/gex_grna_bam_filter.py" \
             --register-fresh \
@@ -296,7 +319,9 @@ else
     fi
 fi
 
-python3 "${SCRIPTS_DIR}/gex_alignment.py" --config "${CONFIG}" --write-star-policy "${OUT_SUBLIB}"
+if [[ "${GEX_GENE_ASSIGNMENT}" == "unique" ]]; then
+    python3 "${SCRIPTS_DIR}/gex_alignment.py" --config "${CONFIG}" --write-star-policy "${OUT_SUBLIB}"
+fi
 
 echo ""
 echo "Step 1a complete for ${LIB_NAME}: $(date)"

@@ -50,6 +50,9 @@ class ReleasePackagingTest(unittest.TestCase):
             "scripts/gex_grna_filter.py",
             "scripts/gex_grna_bam_filter.py",
             "scripts/write_fastq_input_identity.py",
+            "scripts/run_star_fractional.py",
+            "scripts/gex_counting.py",
+            "scripts/gex_runtime.py",
         )
         tracked = set(subprocess.check_output(
             ["git", "ls-files"], cwd=ROOT, text=True
@@ -64,7 +67,7 @@ class ReleasePackagingTest(unittest.TestCase):
         self.assertIn('--source-pre-align-stats "${SOURCE_PRE_ALIGN_STATS}"', text)
         self.assertLess(
             text.index('--source-pre-align-stats "${SOURCE_PRE_ALIGN_STATS}"'),
-            text.index("--mode mol"),
+            text.index("    run_star_quantification\n", text.index('--source-pre-align-stats "${SOURCE_PRE_ALIGN_STATS}"')),
         )
 
     def test_c2_case_study_release_assets_are_tracked(self):

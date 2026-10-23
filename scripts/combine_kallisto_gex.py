@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Step 1b sparse combine for native kallisto gene/transcript products.
+"""Step 1b sparse combine for shared STAR/kallisto gene/transcript products.
 
 Matrix/metadata contracts match the pipeline's DGE consumer. Floating point
 counts and transcript identities are preserved throughout.
@@ -17,22 +17,24 @@ from scipy import io as sio, sparse
 
 try:
     from scripts.gex_alignment import (SCHEMA, atomic_json, backend_options, resolve_path,
-                                       settings_identity, sha256_file, validate_completion)
-    from scripts.run_kallisto_gex import write_product
+                                       settings_identity, sha256_file, validate_completion,
+                                       uses_shared_counter, completion_name, library_output_dir)
+    from scripts.gex_counting import write_product
 except ModuleNotFoundError:
     from gex_alignment import (SCHEMA, atomic_json, backend_options, resolve_path,
-                               settings_identity, sha256_file, validate_completion)
-    from run_kallisto_gex import write_product
+                               settings_identity, sha256_file, validate_completion,
+                               uses_shared_counter, completion_name, library_output_dir)
+    from gex_counting import write_product
 
 
 def combine(config, config_path):
     options = backend_options(config)
-    if options["backend"] != "kallisto":
-        raise ValueError("Native kallisto combine requires the kallisto backend")
+    if not uses_shared_counter(options):
+        raise ValueError("Shared combine requires kallisto or fractional STAR")
     root = resolve_path(config["paths"]["output_dir"], config_path)
     destination = root / "gex_combined"
     destination.mkdir(parents=True, exist_ok=True)
-    completion = destination / "kallisto.complete.json"
+    completion = destination / completion_name(options)
     completion.unlink(missing_ok=True)
     library_manifests = {}
     sample_libraries = {}
@@ -48,7 +50,7 @@ def combine(config, config_path):
         sample_libraries.setdefault(library["sample_name"], []).append(name)
     reference_hashes = {payload["reference_sha256"] for payload in library_manifests.values()}
     if len(reference_hashes) != 1:
-        raise ValueError("Cannot combine kallisto libraries built against different references")
+        raise ValueError("Cannot combine GEX libraries built against different references")
     artifacts = []
     for sample, libraries in sample_libraries.items():
         if options["output_level"] != "both":
@@ -66,7 +68,7 @@ def combine(config, config_path):
             features = None
             provenance = None
             for suffix, library in enumerate(libraries, start=1):
-                source = root / f"gex_{library}" / sample / dirname
+                source = library_output_dir(config, config_path, library) / sample / dirname
                 current_features = pd.read_csv(source / "features.csv", dtype=str).fillna("")
                 if features is None:
                     features = current_features
@@ -96,9 +98,9 @@ def combine(config, config_path):
                                                      "cell_metadata.csv", "anndata.h5ad")]
             artifacts.append(target / ("all_genes.csv" if level == "gene" else "all_transcripts.csv"))
     payload = {
-        "schema_version": SCHEMA, "complete": True, "backend": "kallisto",
+        "schema_version": SCHEMA, "complete": True, "backend": options["backend"],
         "settings_sha256": settings_identity(config), "reference_sha256": reference_hashes.pop(),
-        "sources": {name: sha256_file(root / f"gex_{name}" / "process/kallisto.complete.json")
+        "sources": {name: sha256_file(library_output_dir(config, config_path, name) / "process" / completion_name(options))
                     for name in names},
         "artifacts": {path.relative_to(destination).as_posix(): sha256_file(path) for path in artifacts},
     }

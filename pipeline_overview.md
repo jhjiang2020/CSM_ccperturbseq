@@ -14,10 +14,14 @@ flowchart TD
     GEX[GEX FASTQs] --> PRE[Step 1a: Parse preprocessing and barcode correction]
     PRE --> FILTER{Optional TSO + guide filter}
     FILTER -->|survivors| BACKEND{GEX backend}
-    BACKEND -->|default| STAR[STAR + Parse molecule/DGE path]
+    BACKEND -->|default| STAR[STAR name-sorted BAM]
+    STAR --> ASSIGN{Gene assignment}
+    ASSIGN -->|unique| PARSE[Parse molecules/DGE]
+    ASSIGN -->|fractional| SHARED[Shared compatibility-set molecule counting]
     BACKEND -->|optional| KAL[kallisto BUS + native UMI counting]
-    STAR --> COMB[Step 1b: backend-specific GEX combine]
-    KAL --> COMB
+    PARSE --> COMB[Step 1b: matching GEX combine]
+    KAL --> SHARED
+    SHARED --> COMB
     FILTER -. corrected guide evidence .-> S1C[Optional Step 1c: match + strict subset]
     GRNA[Dedicated guide FASTQs] --> S2[Step 2: Parse barcode decoding]
     PRE --> S2
@@ -49,12 +53,13 @@ counting. `paths.genome_dir` still supplies Parse annotation and initialization.
 `none` on either backend. Native counting holds complete corrected-barcode
 groups within workers and aggregates physical wells after UMI collapse.
 Parallel shards merge in original barcode order to preserve fractional sums.
-STAR's alternative correction modes use an in-memory function override; vendor
+Unique STAR's alternative correction modes use an in-memory function override; vendor
 source files are unchanged.
 
-Kallisto defaults to unique gene assignment and gene-level sparse output.
-Fractional genes and additional/primary transcript-target output are explicit
-choices. Step 1b dispatches to the matching combine implementation, preserving
+Both aligners support `gex_alignment.gene_assignment: unique|fractional`.
+Fractional STAR and kallisto share the molecule/output core. Native unique STAR
+retains the Parse path. Transcript-target output is a kallisto option.
+[Counting choices and Parse/Tony settings](docs/GEX_COUNTING.md). Step 1b dispatches to the matching combine implementation, preserving
 feature order and fractional counts. Step 5 validates expression provenance and
 aligns dedicated/combined guide products to the called cells.
 [Full semantics and limits](docs/KALLISTO_BACKEND.md).

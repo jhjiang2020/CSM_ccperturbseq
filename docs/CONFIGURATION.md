@@ -64,11 +64,12 @@ merely to suppress orientation warnings in a dual-guide analysis.
 [Read-length scenarios](ILLUMINA_100_CYCLE_SEQUENCING.md) and
 [bounded reference preflight](SCALABILITY_AND_PREFLIGHT.md) explain those choices.
 
-## Step 1a: GEX backend and UMI correction
+## Step 1a: GEX backend, assignment and UMI correction
 
 ```yaml
 gex_alignment:
   backend: star
+  gene_assignment: unique
   umi_correction: parse
 ```
 
@@ -77,6 +78,11 @@ Omitting the entire section preserves STAR and Parse-default correction.
 | Key | Default | Effect |
 | --- | --- | --- |
 | `gex_alignment.backend` | `star` | `star` or `kallisto`; only the transcriptomic alignment/counting path changes. |
+| `gex_alignment.gene_assignment` | `unique` | `unique` or `fractional`, on either aligner. |
+| `gex_alignment.output_level` | `gene` | STAR: gene only; kallisto: gene, both, transcript. |
+| `gex_alignment.transcript_assignment` | `fractional` | Kallisto target assignment: unique or fractional. |
+| `gex_alignment.count_threads` | `0` | Shared counter uses allocated cores; positive integer caps workers. |
+| `gex_alignment.star.max_multimaps` | `3` | Maximum STAR loci per read; all reported hits are retained for fractional counting. |
 | `gex_alignment.umi_correction` | `parse` | Applies to **both** GEX backends; independent of Step 4 gRNA correction. |
 | `splitpipe.kit`, `chemistry` | Values in copied template | Must match the Parse experiment, not the aligner choice. |
 | `splitpipe.sample_wells` | Example: `A1-B12` | Sample well range used for each configured sublibrary/sample. |
@@ -100,28 +106,28 @@ changes the counts. A new output root is required when comparing policies.
 ```yaml
 gex_alignment:
   backend: kallisto
+  gene_assignment: unique
   umi_correction: parse
+  output_level: gene
+  count_threads: 0
+  transcript_assignment: fractional
   kallisto:
     executable: kallisto
     reference_dir: references/kallisto_GRCh38
-    gene_assignment: unique
-    output_level: gene
-    transcript_assignment: fractional
     strand: forward
     cell_umi_threshold: null
-    count_threads: 0
 ```
 
 | Key under `gex_alignment.kallisto` | Default | Meaning |
 | --- | --- | --- |
 | `executable` | `kallisto` | Executable on production PATH or an explicit path into a separate tools environment. |
 | `reference_dir` | Required | Reference directory with the repository builder's validated manifest and index. |
-| `gene_assignment` | `unique` | Retain gene-resolved evidence. `fractional` enables candidate-gene resolution and equal `1/n` weighting of unresolved gene sets. |
-| `output_level` | `gene` | `gene`: primary gene matrix; `both`: primary genes plus target matrix; `transcript`: target matrix becomes primary. |
-| `transcript_assignment` | `fractional` | `fractional`: equal weights across surviving targets; `unique`: require one surviving target. |
 | `strand` | `forward` | `forward`, `reverse` or `unstranded`, according to the assay. |
 | `cell_umi_threshold` | `null` | Initialized Parse automatic cell calling; a positive number explicitly fixes the cutoff. |
-| `count_threads` | `0` | Use allocated cores for counting; a positive integer caps workers, and `1` runs serially. Cannot exceed the allocated `--threads` in the pipeline. |
+
+Legacy nested policy keys remain accepted; conflicting common/nested values
+are rejected. See [counting choices](GEX_COUNTING.md) for STAR fractional BAM
+requirements and the Parse/Tony settings comparison.
 
 Fractional gene assignment is optional and is **not** an EM or TPM estimate.
 It changes the definition of the gene count, so compare it as a separate policy.
@@ -206,7 +212,7 @@ Step 1b reserves 96 GB. See [UGER resources](UGER_RESOURCES.md) for every
 profile/default, scheduler-wide fields, precedence, QC compatibility and tuning
 examples. The master's dry run shows resolved resources; direct `qsub` worker
 submissions use their fallback directives. `NSLOTS` controls parallel workers;
-`kallisto.count_threads` caps counting within that allocation.
+`gex_alignment.count_threads` caps counting within that allocation.
 
 `output` contains plotting/intermediate preferences, but not every historical
 key is a global switch: Step 5 currently writes `combined_adata.h5ad` directly.

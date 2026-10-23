@@ -1,5 +1,21 @@
 # Release Notes
 
+## Step 1a assignment harmonization (2026-10-23)
+
+- Added fractional gene assignment for STAR from complete name-sorted BAMs,
+  with NH/primary checks and Parse stranded gene-span annotation.
+- Moved gene/output/count-thread policy keys to `gex_alignment`, independently
+  of aligner and UMI correction. Legacy nested kallisto keys remain accepted;
+  conflicting values fail validation. All twelve gene-policy combinations are
+  available. STAR transcript output is explicitly unsupported.
+- Shared molecule counting, Parse DGE initialization, fractional MTX/H5AD output,
+  combination and completion validation between fractional STAR and kallisto.
+  Native unique STAR retains its Parse behavior. Vendor sources remain pristine.
+- Added [counting choices and Parse/Tony comparison](docs/GEX_COUNTING.md).
+  Tony’s checked-in settings correspond most closely to kallisto + fractional
+  + none, unstranded; this is not a claim of identical end-to-end counts.
+
+
 ## v2.0 — Native kallisto and tunable GEX UMI correction (2026-10-22)
 
 All maintained UGER stages now share optional YAML resources: CPU slots, memory

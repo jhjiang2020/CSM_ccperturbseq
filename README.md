@@ -19,19 +19,22 @@ compute environment. Access to the rgupta folder is not required.
   `gex_alignment.umi_correction: parse` (default), `directional`, or `none`.
   The directional condition is `n_high >= 2*n_low - 1`. This setting does not
   change dedicated or GEX-derived **gRNA** UMI correction in Step 4.
+- **Both aligners support unique/fractional gene assignment** through
+  `gex_alignment.gene_assignment`. STAR fractional counting retains secondary
+  alignments and uses the same molecule/output core as kallisto.
 - **Native kallisto counting writes compatible sparse products** for Step 1b
   and downstream integration. Gene counts are the default; equal-fractional
   gene assignment and transcript/target output are optional. No BAM projection
   is used to feed pseudoalignments into Parse gene counting.
 - **Parallel molecule counting** keeps each corrected barcode intact and merges
-  results in barcode order. `kallisto.count_threads: 0` uses the allocated cores;
+  results in barcode order. `gex_alignment.count_threads: 0` uses the allocated cores;
   `1` selects serial counting. Fractional values are retained.
 
 The [parallel counting benchmark](docs/KALLISTO_PARALLEL_BENCHMARK_REPORT.md)
 compares the optimized counter with saved baseline counts and runtime. Counting
-uses allocated cores by default; `gex_alignment.kallisto.count_threads` can cap it.
+uses allocated cores by default; `gex_alignment.count_threads` can cap it.
 
-See the [release notes](RELEASE_NOTES.md), [backend guide](docs/KALLISTO_BACKEND.md)
+See [counting choices and Parse/Tony presets](docs/GEX_COUNTING.md), the [release notes](RELEASE_NOTES.md), [backend guide](docs/KALLISTO_BACKEND.md)
 and [migration guide](docs/MIGRATING_TO_V2.md). Use a separate output directory
 when changing backend, UMI policy, reference or feature level.
 
@@ -68,6 +71,7 @@ The default GEX choice is:
 ```yaml
 gex_alignment:
   backend: star
+  gene_assignment: unique
   umi_correction: parse
 ```
 
@@ -77,13 +81,13 @@ same FASTA/GTF release as the Parse reference:
 ```yaml
 gex_alignment:
   backend: kallisto
+  gene_assignment: unique
   umi_correction: parse
+  output_level: gene
+  count_threads: 0
   kallisto:
     executable: kallisto
     reference_dir: references/kallisto_GRCh38
-    gene_assignment: unique
-    output_level: gene
-    count_threads: 0
 ```
 
 `executable: kallisto` works only if the executable is on the **production job's**

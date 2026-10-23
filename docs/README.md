@@ -16,7 +16,8 @@ own storage and Parse-provided software.
 | [UGER resources](UGER_RESOURCES.md) | Optional YAML CPU, memory, time, array concurrency and site settings for every maintained submission path. |
 | [Architecture](../pipeline_overview.md) | Data flow and repository boundaries. |
 | [Detailed workflow](DETAILED_WORKFLOW.md) | Stage inputs/outputs, reference/matching logic and AnnData integration. |
-| [Kallisto backend](KALLISTO_BACKEND.md) | Native BUS counting, UMI policies, gene/target resolution and output contracts. |
+| [Counting choices](GEX_COUNTING.md) | STAR/kallisto × unique/fractional × three UMI modes; Parse defaults and Tony workflow comparison. |
+| [GEX backend details](KALLISTO_BACKEND.md) | Native BUS counting, UMI policies, gene/target resolution and output contracts. |
 | [GEX decontamination](GEX_DECONTAMINATION_V1_4.md) | Removal before either backend, optional Step 1c, source union and historical STAR BAM reuse. The filename preserves old links; the guide covers current behavior. |
 | [Sequencing scenarios](ILLUMINA_100_CYCLE_SEQUENCING.md) | Read reach, short-GEX versus short-guide decisions and compatible identity models. |
 | [Preflight and scaling](SCALABILITY_AND_PREFLIGHT.md) | iBAR diagnostics, CPU/memory controls and stage-specific constraints. |
