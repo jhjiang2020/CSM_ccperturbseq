@@ -75,8 +75,16 @@ its owner. See the [reference-build recipe](INSTALLATION.md#optional-kallisto-to
 for a personal build or mixed shared/personal tools and references. The production
 job must be able to execute the configured binary: activating a separate tools
 environment interactively does not place it on a later production job's PATH.
-Both backends still require `paths.genome_dir` to identify the Parse reference.
-
+`paths.genome_dir` supplies **Parse's canonical gene metadata** to the GEX
+workflow integrated with split-pipe: gene IDs, names, feature order and
+genome/species labels for outputs and QC. Counting checks kallisto's
+target-to-gene assignments against the canonical IDs and genome labels, then
+uses Parse's names and order. The directory is generated directly with
+`split-pipe --mode mkref` outside this pipeline; authorized lab users can reuse
+the precomputed shared directory. Its bundled STAR index serves the STAR
+backend; kallisto pseudoaligns against its own `reference_dir/index.idx`.
+The current config retains the complete split-pipe reference directory. A
+[future interface may separate Parse metadata and the STAR index](INSTALLATION.md#future-separation-of-parse-metadata-and-star-index).
 
 The builder refuses an existing destination. It uses `kb ref`, checks that the
 runtime can read the index, and saves `reference.json`, `index.idx`, `t2g.txt`,

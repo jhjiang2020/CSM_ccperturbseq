@@ -1,0 +1,167 @@
+# rgupta lab / UGER: single-target (one guide), with iBAR.
+# Uses the guide parsing/assignment settings in config_single.yaml.
+# Step 0 design columns: sgRNA_ID, spacer, target, iBAR (optional target_version).
+# iBAR is matched; Step 4 calls individual guides and uses guide-level UMI
+# grouping (umi_dedup_ibar: false), as in the existing single-guide example.
+# Copy to my_project.v2.yaml and edit your copy. Shared software, Parse gene
+# metadata/STAR index and the kallisto reference are already configured.
+# Replace EDIT_ME paths/prefixes and confirm kit, chemistry, wells and anchors.
+# The design_file placeholder is unused unless you run Step 0.
+# All presets are standalone YAML; no config includes or merging are needed.
+# See docs/QUICKSTART.md and docs/CONFIGURATION.md for the preset matrix.
+
+analysis_name: "my_project.single"
+
+# Keep both fields: this standalone prefix also contains condabin/conda.
+environment:
+  conda_prefix: "/medpop/rgupta/Jiahao/conda/envs/splitpipe-share"
+  conda_env: "/medpop/rgupta/Jiahao/conda/envs/splitpipe-share"
+
+paths:
+  # EDIT_ME paths are placeholders. Set absolute paths before submitting.
+  project_dir: "EDIT_ME/project_checkout"
+  fastq_dir: "EDIT_ME/fastq"
+  output_dir: "EDIT_ME/output/my_project.single.v2"
+  log_dir: "EDIT_ME/logs/my_project.single.v2"
+  grna_reference: "EDIT_ME/references/grna_reference.single.csv"
+  # Shared dependencies: keep these paths for the lab's GRCh38 setup.
+  splitpipe_dir: "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/ParseBiosciences-Pipeline.1.6.4"
+  # Reference generated directly with split-pipe --mode mkref outside this pipeline.
+  # Both backends use its canonical gene IDs/names/order and genome/species labels
+  # for outputs and QC. STAR also uses its bundled index; kallisto uses its own.
+  # Future metadata/index separation: docs/INSTALLATION.md.
+  genome_dir: "/medpop/rgupta/Jiahao/reference_genome/parse_refdata-gex-GRCh38-2024-A"
+
+# STAR is the default. To use the shared kallisto stack, change ONLY backend
+# to "kallisto". Use a new output/log root when changing counting settings.
+gex_alignment:
+  backend: "star"                  # star or kallisto
+  gene_assignment: "unique"        # unique or fractional, with either backend
+  umi_correction: "parse"          # parse, directional or none
+  output_level: "gene"             # kallisto also supports both or transcript
+  count_threads: 0                 # use allocated cores
+  kallisto:
+    executable: "/medpop/rgupta/Jiahao/conda/envs/csm_kallisto-share/bin/kallisto"
+    reference_dir: "/medpop/rgupta/Jiahao/reference_genome/kallisto_refdata-gex-GRCh38-2024-A_nac_20261023"
+    strand: "forward"
+    cell_umi_threshold: null        # Parse automatic cell calling
+
+# Match your Parse experiment; these are WT/v3 example settings.
+splitpipe:
+  kit: "WT"
+  chemistry: "v3"
+  sample_wells: "A1-B12"
+  threads: 16                     # legacy; UGER workers use allocated NSLOTS
+  memory_gb: 64                   # legacy; reservations are set under uger
+  bypass_kit_score: true
+
+# Add one entry per paired GEX/dedicated-guide sublibrary. Shared sample_name
+# values pool sublibraries. Keep the order fixed from Step 1b through Step 5.
+libraries:
+  - sublibrary_name: "S1"
+    gex_prefix: "EDIT_ME_GEX_S1"
+    grna_prefix: "EDIT_ME_GUIDE_S1"
+    sample_name: "SampleA"
+
+# Only Step 0 uses this input. Skip Step 0 if grna_reference already exists.
+design:
+  design_file: "EDIT_ME/references/library_design.single.csv"
+  rev_comp_ibar: true
+
+# Guide read layout for this preset; confirm anchors against your construct.
+grna_structure:
+  single_guide_mode: true
+  fixed_seq_1: "AAGCAGTGGTATCAACGCAGAGTGAATGGG"
+  fixed_seq_2: "GTTTGAGAGCTAAGCAGGA"
+  fixed_seq_3: ""
+  fixed_seq_4: "GACTGCTTAGCAAGTT"
+  fixed_seq_5: ""
+  grna_lengths: [20, 21]
+  ibar_length: 7
+  tso_max_edit_dist: 3
+  fixed_seq_max_mismatches: 2
+
+grna_matching:
+  max_lev_dist: 3
+  max_lev_dist_ibar: 2
+  save_failed_reads: false
+
+# Step 4 gRNA correction is independent of gex_alignment.umi_correction.
+guide_assignment:
+  dual_guide_counting_mode: false
+  min_umi_threshold: 5
+  multiplet_strategy: "all"
+  min_dominance_fraction: 0.0
+  umi_dedup_ibar: false
+  max_umi_edits: 1
+  min_reads_per_umi: 1
+  compute_saturation_curve: true
+
+barcode_extraction:
+  bc_max_edit_dist: 1
+  min_r1_length: 20
+  min_r2_length: 50
+  n_processes: 8
+  max_reads: 0
+
+# Production carry-over filter for the standard CSM construct. Guide identity
+# recovery from GEX stays off until read length and assay support it.
+gex_decontamination:
+  enabled: true
+  integration: "splitpipe_pre_router"
+  tso_max_edit_dist: 3
+  max_tso_start: 2
+  tso_matching:
+    backend: "edlib"
+  filter_matching:
+    backend: "packed_inline"
+    guide_distance: "hamming"
+    max_guide_mismatches: 1
+    allow_guide_indels: false
+    full_guide_required: true
+    remove_reference_supported_ambiguous_hits: true
+  io:
+    write_rejected_raw_pairs: true
+    keep_rejected_raw_pairs_after_step1c: true
+    write_read_decisions: false
+  step1c:
+    enabled: false
+    output_namespace: "gex_grna_identity"
+    strict_matching:
+      enabled: true
+      max_guide_edit_distance: 1
+      max_ibar_edit_distance: 1
+      require_resolved_ibar_in_dual_mode: false
+      reject_ibar_decoupled: false
+  combine_with_grna_arm:
+    enabled: false
+    combine_before_umi_collapse: true
+    retain_source_provenance: true
+  existing_alignment:
+    enabled: false
+    policy: "auto_sandbox"
+    source_output_dir_template: "{output_dir}/gex_{library}"
+    sandbox_output_dir_template: "{output_dir}/gex_{library}_v1_4"
+    bam_backend: "auto"
+  require_qc_policy: false
+  qc_policy_file: "references/gex_grna_filter_policy.yaml"
+
+# Memory is PER SLOT: Step 1a reserves 16 * 8 = 128 GB.
+# See docs/UGER_RESOURCES.md for tuning and other profiles.
+uger:
+  queue: broad
+  parallel_environment: smp
+  binding: linear
+  step1a: {slots: 16, memory_per_slot_gb: 8, runtime_hours: 48}
+  step1b: {slots: 4, memory_per_slot_gb: 16, runtime_hours: 4}
+  step1c: {slots: 1, memory_per_slot_gb: 4, runtime_hours: 12}
+  step1c_aggregate: {slots: 4, memory_per_slot_gb: 32, runtime_hours: 8}
+  step2: {slots: 1, memory_per_slot_gb: 4, runtime_hours: 12}
+  step3: {slots: 8, memory_per_slot_gb: 4, runtime_hours: 12}
+  step4: {slots: 4, memory_per_slot_gb: 32, runtime_hours: 4}
+  step5: {slots: 1, memory_per_slot_gb: 32, runtime_hours: 4}
+
+output:
+  save_intermediates: true
+  generate_qc_plots: true
+  output_format: "h5ad"

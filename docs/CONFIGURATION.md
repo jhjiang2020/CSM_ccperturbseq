@@ -5,6 +5,19 @@ name, and edit the copy. The public files are complete examples with lab-specifi
 paths; they are not ready-to-run configs for another project. Use
 [the quick start](QUICKSTART.md) for the shortest setup route.
 
+**rgupta lab users on UGER:** copy [`config_rgupta.yaml`](../config_rgupta.yaml)
+instead. It preconfigures the shared production environment, Parse distribution,
+kallisto executable and both precomputed GRCh38 references. Replace every
+`EDIT_ME` input/output path or FASTQ prefix, then confirm your analysis name,
+libraries, kit, chemistry, wells and guide construct. Keep the shared dependency
+paths. STAR is the default; changing `gex_alignment.backend` to `kallisto` is
+enough to select the shared kallisto stack. Complete standalone examples cover
+[single-target with iBAR](../config_rgupta_single.yaml) and
+[single-target without iBAR](../config_rgupta_single_no_ibar.yaml).
+`config_rgupta.yaml` has the same settings as the single-target/iBAR example.
+See the [preset selection table](QUICKSTART.md#3-make-your-run-configuration)
+for their output semantics and read-layout requirements.
+
 ## Paths, environment and libraries
 
 | Section/key | Used by | What to set |
@@ -14,7 +27,7 @@ paths; they are not ready-to-run configs for another project. Use
 | `paths.project_dir` | Workers | Absolute v2.0 checkout path; determines the scripts actually executed. |
 | `paths.fastq_dir` | Steps 1a/2 and raw-read QC | Your paired FASTQ directory. |
 | `paths.splitpipe_dir` | Steps 1a/1b, barcode decoding and QC | Pristine Parse 1.6.4 distribution. |
-| `paths.genome_dir` | Step 1 and controlled QC | Complete Parse reference, including when kallisto is selected. |
+| `paths.genome_dir` | Step 1 and controlled QC | split-pipe-generated reference directory: canonical gene metadata for both backends, plus the alignment index used by STAR. |
 | `paths.grna_reference` | Guide matching, GEX filtering, assignment | Formatted guide/iBAR CSV. |
 | `paths.output_dir` | All processing stages | New writable output root for this parameter set. |
 | `paths.log_dir` | Launcher/workers | Writable scheduler log directory. |
@@ -27,6 +40,14 @@ Use absolute production paths, particularly in copied configs passed to compute
 nodes. Shell variables in YAML are not expanded. Kallisto's `reference_dir` and
 slash-containing `executable` are resolved relative to the YAML when relative;
 this behavior is not a promise that every legacy path key is config-relative.
+
+`paths.genome_dir` supplies Parse's canonical gene IDs, names, feature order and
+genome/species labels for the integrated GEX outputs and QC. Kallisto uses this
+metadata to check target-to-gene assignments and produce consistently annotated
+matrices; its pseudoalignment index comes from `gex_alignment.kallisto.reference_dir`.
+Generate the Parse reference **directly with split-pipe**, outside this pipeline,
+or reuse the shared lab directory. The current config uses one directory for
+Parse metadata and the STAR index; see the [current layout and future separation](INSTALLATION.md#future-separation-of-parse-metadata-and-star-index).
 
 The Step 1a shell worker searches
 `*<gex_prefix>*_R1_*fastq.gz` and matching R2 names. It accepts multiple lanes,
@@ -55,8 +76,20 @@ public YAML comments.
 | Identity model | `grna_structure.single_guide_mode` | `grna_structure.ibar_length` | `guide_assignment.dual_guide_counting_mode` |
 | --- | --- | --- | --- |
 | Standard dual CSM with iBAR | `false` | Actual iBAR length (example: `7`) | `true` |
+| Single guide with iBAR | `true` | Actual iBAR length (example: `7`) | `false` |
 | Single guide, no iBAR | `true` | `0` | `false` |
 | Guide-only analysis of reads too short for iBAR | Choose the guide-only parsing configuration in the sequencing guide | `0` | `false` |
+
+The single/no-iBAR preset uses `umi_dedup_ibar: false`, zero iBAR edit distances
+and no resolved-iBAR/decoupling gates. The single/iBAR preset matches
+`config_single.yaml`: iBAR matching is enabled, with guide-level UMI grouping
+(`umi_dedup_ibar: false`).
+
+For Step 0, the shared single-target presets accept `sgRNA_ID`, `spacer` and
+`target`, plus `iBAR` when used (`target_version` is optional).
+Omit or leave the iBAR column empty for no-iBAR designs. A supplied formatted
+reference always retains the `ibar_seq` column, including when its values are
+empty.
 
 The standard examples use 20/21-nt guides. Confirm `grna_lengths`, TSO,
 stem/tracr anchors and iBAR length against the construct. Do not turn off iBARs

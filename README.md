@@ -47,26 +47,56 @@ cp config_dual.yaml my_project.v2.yaml    # or config_single.yaml
 ```
 
 Use the checkout containing the v2.0 implementation; record its commit. A Git
-release tag is not assumed by these instructions. Obtain Parse 1.6.4 separately,
-then follow [installation and references](docs/INSTALLATION.md). Edit the copied
-YAML's environment, all paths, libraries, kit/chemistry and guide reference.
-The public configs contain example project paths and must be customized.
+release tag is not assumed by these instructions. For your own installation,
+obtain Parse 1.6.4 separately and follow [installation and references](docs/INSTALLATION.md).
+Edit the copied YAML's environment, paths, libraries, kit/chemistry and guide
+reference. The rgupta shared preset below already fills in the dependency paths.
 
-For authorized lab members, an **installation-free shared environment** is
-available. In the copied YAML, use:
+**rgupta lab users on UGER:** start with
+[`config_rgupta.yaml`](config_rgupta.yaml):
+`cp config_rgupta.yaml my_project.v2.yaml`. It already configures the shared
+production environment, kallisto executable and **both precomputed GRCh38
+references** together:
 
 ```yaml
 environment:
   conda_prefix: "/medpop/rgupta/Jiahao/conda/envs/splitpipe-share"
   conda_env: "/medpop/rgupta/Jiahao/conda/envs/splitpipe-share"
+paths:
+  splitpipe_dir: "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/ParseBiosciences-Pipeline.1.6.4"
+  # split-pipe-generated metadata for both backends; STAR also uses its index.
+  genome_dir: "/medpop/rgupta/Jiahao/reference_genome/parse_refdata-gex-GRCh38-2024-A"
+gex_alignment:
+  backend: star                 # change to kallisto to use the shared stack below
+  gene_assignment: unique        # or fractional
+  umi_correction: parse          # or directional / none
+  output_level: gene
+  count_threads: 0
+  kallisto:
+    executable: "/medpop/rgupta/Jiahao/conda/envs/csm_kallisto-share/bin/kallisto"
+    reference_dir: "/medpop/rgupta/Jiahao/reference_genome/kallisto_refdata-gex-GRCh38-2024-A_nac_20261023"
+    strand: forward
 ```
 
-The [shared setup](docs/INSTALLATION.md#optional-shared-rgupta-setup) also lists
-the validated kallisto companion and the
-[matching shared GRCh38 reference](docs/INSTALLATION.md#shared-grch38-kallisto-reference),
-with exact run-config paths and lab read-only permissions. Configure
-your own writable project, output and logs; the shared environment is a
-dependency. Without shared-folder access, follow the own-installation route.
+No personal Conda/kallisto installation, module loading or reference build is
+needed with this preset. Replace every `EDIT_ME` value with your own absolute
+cluster path or FASTQ prefix, and confirm the libraries, kit/chemistry, wells
+and guide construct. Keep the shared dependency paths; use your own writable
+checkout, output and logs. Change only `gex_alignment.backend` to select
+kallisto; keep `paths.genome_dir` with either backend. Complete shared examples cover
+[single-target with iBAR](config_rgupta_single.yaml) and
+[single-target without iBAR](config_rgupta_single_no_ibar.yaml).
+`config_rgupta.yaml` uses the single-target/iBAR settings.
+See the [preset table](docs/QUICKSTART.md#3-make-your-run-configuration)
+for read-layout requirements and the [shared setup](docs/INSTALLATION.md#optional-shared-rgupta-setup)
+for validation, permissions and [personal installation options](docs/INSTALLATION.md#optional-kallisto-tools-and-reference).
+
+`paths.genome_dir` supplies Parse's canonical gene table—IDs, names, feature
+order and genome/species labels—for the integrated GEX outputs and QC.
+Kallisto's target-to-gene assignments are checked against that metadata;
+pseudoalignment uses its own kallisto index. Generate the Parse directory
+directly with split-pipe outside this pipeline, or reuse the shared directory.
+See [reference preparation and future metadata/index separation](docs/INSTALLATION.md#parse-reference-for-both-backends).
 
 The default GEX choice is:
 
@@ -77,8 +107,9 @@ gex_alignment:
   umi_correction: parse
 ```
 
-To use kallisto, add its executable and the validated reference built from the
-same FASTA/GTF release as the Parse reference:
+For a personal kallisto setup, configure its executable and a validated reference
+built from the same FASTA/GTF release as the Parse reference. The lab preset
+already supplies these fields; retain its absolute paths:
 
 ```yaml
 gex_alignment:

@@ -9,7 +9,7 @@ Parse split-pipe 1.6.4.
 
 | Your access | Route |
 | --- | --- |
-| Broad with access to the shared rgupta software/reference folders | Clone your own project checkout; optionally reuse the read-only production environment and compatible references. See [shared setup](INSTALLATION.md#optional-shared-rgupta-setup). |
+| Broad with access to the shared rgupta software/reference folders | Clone your own checkout and copy [`config_rgupta.yaml`](../config_rgupta.yaml); the shared environment, kallisto executable and both GRCh38 references are preconfigured. |
 | Broad without that access | Install Parse 1.6.4 and dependencies in your own storage and prepare your own references. Use the same UGER launcher with your own absolute paths. |
 | Another institution or Linux server | Install your own dependencies/references. Use your scheduler to allocate resources, then invoke the existing worker scripts with the [portable recipe](RUNNING.md#another-scheduler-or-an-existing-linux-allocation). |
 
@@ -33,11 +33,46 @@ Use a checkout containing `scripts/run_kallisto_gex.py` and
 `v2.0` Git tag has already been published. The downstream `analysis/` submodule
 is optional for pipeline execution.
 
-[Install Parse 1.6.4 and `requirements_extra.txt`](INSTALLATION.md#own-production-environment)
-in the production `splitpipe` environment, or configure the shared prefix.
-Kallisto users can use the [published shared companion](INSTALLATION.md#shared-kallisto-companion-published-2026-10-22),
-and [matching shared GRCh38 reference](INSTALLATION.md#shared-grch38-kallisto-reference),
-or create the [separate tools environment and reference](INSTALLATION.md#optional-kallisto-tools-and-reference).
+**rgupta lab users on UGER can reuse this complete shared setup.** The
+[`config_rgupta.yaml`](../config_rgupta.yaml) preset contains all these settings:
+
+```yaml
+environment:
+  conda_prefix: "/medpop/rgupta/Jiahao/conda/envs/splitpipe-share"
+  conda_env: "/medpop/rgupta/Jiahao/conda/envs/splitpipe-share"
+paths:
+  splitpipe_dir: "/medpop/rgupta/Jiahao/TIMI/CSM_ccperturbseq/ParseBiosciences-Pipeline.1.6.4"
+  # split-pipe-generated metadata for both backends; STAR also uses its index.
+  genome_dir: "/medpop/rgupta/Jiahao/reference_genome/parse_refdata-gex-GRCh38-2024-A"
+gex_alignment:
+  backend: star                 # change to kallisto to use the shared stack below
+  gene_assignment: unique        # or fractional
+  umi_correction: parse          # or directional / none
+  output_level: gene
+  count_threads: 0
+  kallisto:
+    executable: "/medpop/rgupta/Jiahao/conda/envs/csm_kallisto-share/bin/kallisto"
+    reference_dir: "/medpop/rgupta/Jiahao/reference_genome/kallisto_refdata-gex-GRCh38-2024-A_nac_20261023"
+    strand: forward
+```
+
+No personal Conda/kallisto installation, kallisto module or reference build is
+needed. Both references use GRCh38 2024-A / GENCODE v44; the kallisto reference
+was validated with the shared 0.52.0 executable. Keep these dependency paths
+and put your run's inputs, output and logs in your own storage. See
+[shared setup and access requirements](INSTALLATION.md#optional-shared-rgupta-setup)
+and [reference validation and permissions](INSTALLATION.md#shared-grch38-kallisto-reference).
+
+`paths.genome_dir` provides Parse's canonical gene IDs, names, feature order and
+genome/species labels for the integrated GEX outputs and QC. Kallisto's
+target-to-gene assignments are checked against that metadata; pseudoalignment
+uses the separate kallisto index above. The Parse directory is generated
+directly with split-pipe outside this pipeline and can be shared as shown.
+See [reference preparation and future metadata/index separation](INSTALLATION.md#parse-reference-for-both-backends).
+
+Without shared access, [install Parse 1.6.4 and `requirements_extra.txt`](INSTALLATION.md#own-production-environment)
+in your production `splitpipe` environment and prepare compatible references.
+Kallisto users can create the [separate tools environment and reference](INSTALLATION.md#optional-kallisto-tools-and-reference).
 Tools and references may be mixed: a compatible personal kallisto 0.52.0 build
 can use the shared reference, or the shared executable can build/use your own
 matching reference. Check index compatibility as described in the installation guide.
@@ -45,25 +80,45 @@ Keep the Parse distribution pristine.
 
 ## 3. Make your run configuration
 
+Choose a complete rgupta preset for your single-target/one-guide design. Both
+use the same shared software and references, and support either GEX backend:
+
+| Guide design | iBAR | Preset | Step 4 output |
+| --- | --- | --- | --- |
+| Single-target / one guide | Present | [`config_rgupta_single.yaml`](../config_rgupta_single.yaml) | Individual guide calls, with iBAR matching. |
+| Single-target / one guide | Absent | [`config_rgupta_single_no_ibar.yaml`](../config_rgupta_single_no_ibar.yaml) | Individual guide calls, with the no-iBAR parser. |
+
+`config_rgupta.yaml` has the same settings as the single-target/iBAR preset.
+The shared presets cover single-target inputs. For short-read experiments that
+do not reach iBAR, also review the [guide-only recipe](ILLUMINA_100_CYCLE_SEQUENCING.md#scenario-2-gex-and-grna-100-cycle-no-ibar).
+
 ```bash
-cp config_dual.yaml my_project.v2.yaml
-# For single-guide designs, start with config_single.yaml instead.
+# rgupta lab / shared UGER setup:
+cp config_rgupta_single.yaml my_project.v2.yaml  # or config_rgupta_single_no_ibar.yaml
+# Own installation: copy config_dual.yaml or config_single.yaml instead.
 CONFIG="$(realpath my_project.v2.yaml)"
 ```
 
-Edit the copy. **Every example project path must be replaced** if it is not
-readable and appropriate for your experiment. Do not edit the shared lab config.
+Edit the copy. In the lab preset, replace **every `EDIT_ME` value** with your own
+absolute cluster path or FASTQ prefix. Set `analysis_name`, libraries and the
+experiment settings below; keep the prefilled shared software/reference paths.
+The chosen preset supplies the guide parsing, iBAR and assignment mode; confirm
+these against the actual construct. For the other templates, replace every
+example path that is not appropriate for your experiment. Keep edits in your
+own run config.
 
 | Required edit | Meaning |
 | --- | --- |
-| `environment.conda_prefix` | Your Conda base containing `condabin/conda`, or the documented shared standalone prefix. |
-| `environment.conda_env` | Production environment name or absolute prefix. |
+| `analysis_name` | Name for your analysis run. |
+| `environment.conda_prefix` | Keep the lab preset; otherwise set your Conda base containing `condabin/conda`. |
+| `environment.conda_env` | Keep the lab preset; otherwise set your production environment name or absolute prefix. |
 | `paths.project_dir` | Absolute path to this checkout. |
 | `paths.fastq_dir` | Absolute directory containing your paired, demultiplexed FASTQs. |
-| `paths.splitpipe_dir` | Pristine Parse 1.6.4 distribution, including its launcher and source modules. |
-| `paths.genome_dir` | Compatible Parse reference; required even when kallisto is selected. |
+| `paths.splitpipe_dir` | Keep the lab preset; otherwise use your pristine Parse 1.6.4 distribution. |
+| `paths.genome_dir` | Keep the lab preset; otherwise prepare a reference directly with split-pipe. Supplies canonical gene metadata for both backends and the index used by STAR. |
 | `paths.grna_reference` | Your formatted guide/iBAR reference CSV. |
 | `paths.output_dir`, `paths.log_dir` | New writable locations for this run. |
+| `design.design_file` | Your design CSV, only if you run Step 0; otherwise unused. |
 | `libraries` | One entry for each paired GEX/guide sublibrary; replace the pilot examples. |
 | `splitpipe.kit`, `chemistry`, `sample_wells` | Match the actual experiment and sample wells. |
 | `grna_structure`, `guide_assignment` | Match single/dual-guide mode, anchors, guide lengths and iBAR presence. |
@@ -94,11 +149,20 @@ fixed from Step 1b through Step 5.
 
 ## 4. Prepare the guide reference and check its orientation
 
-If the reference CSV already exists, use it directly. Otherwise configure
-`design.design_file` and run Step 0 **in a compute allocation**:
+In a **compute allocation**, activate the production environment. For the
+shared lab preset:
 
 ```bash
-conda activate splitpipe
+source /medpop/rgupta/Jiahao/conda/envs/splitpipe-share/etc/profile.d/conda.sh
+conda activate /medpop/rgupta/Jiahao/conda/envs/splitpipe-share
+```
+
+For a personal installation, activate the environment in your config instead.
+If the reference CSV already exists, use it directly and skip Step 0 (the
+`design.design_file` placeholder is unused). Otherwise set `design.design_file`
+and run Step 0 in that allocation:
+
+```bash
 python scripts/00_format_reference.py --config "${CONFIG}"
 ```
 
@@ -129,7 +193,9 @@ gex_alignment:
   umi_correction: parse
 ```
 
-For native kallisto, replace that section with:
+**With `config_rgupta.yaml`, change only `gex_alignment.backend` to `kallisto`**;
+its executable and reference are already set. Use a new output/log root when
+switching backend or counting policies. For a personal kallisto setup, use:
 
 ```yaml
 gex_alignment:
