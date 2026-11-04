@@ -1,4 +1,4 @@
-# CSM ccPerturbSeq Pipeline — v2.0
+# CSM ccPerturbSeq Pipeline — v2.1
 
 Process Parse Biosciences GEX and CROPseq-multi guide FASTQs into an
 analysis-ready `combined_adata.h5ad`. The workflow supports single-guide and
@@ -9,7 +9,18 @@ gRNA carry-over from GEX, and optional recovery of those guide identities.
 the optional shared rgupta setup, and running on Broad UGER or another Linux
 compute environment. Access to the rgupta folder is not required.
 
-## What changes in v2.0
+## What changes in v2.1
+
+Guide recovery is now **opt-in**, with joint TSO/spacer interpretation, automatic
+reference-aware limits and optional iBAR corroboration. Existing configurations
+keep standard matching. The four-library benchmark adds 4.93 million matched
+reads and 437 assigned cells (127 net singlets); biological support is partial.
+See the [single guide to settings, rationale and evidence](docs/GRNA_RECOVERY_V2_1_EVIDENCE.md)
+the [audit-first overlay](examples/grna_recovery_v2_1.yaml), and the
+[full opt-in preset](examples/grna_recovery_v2_1_enabled.yaml), which also adds
+accepted GEX-derived guide evidence to final calls.
+
+## Features retained from v2.0
 
 - **Asymmetric guide/iBAR designs are opt-in.** Per-position iBAR lengths,
   including no-iBAR designs, preserve ambiguity and expose QC capabilities. See
@@ -52,7 +63,7 @@ cd CSM_ccperturbseq
 cp config_dual.yaml my_project.v2.yaml    # or config_single.yaml
 ```
 
-Use the checkout containing the v2.0 implementation; record its commit. A Git
+Use the checkout containing the v2.1 implementation; record its commit. A Git
 release tag is not assumed by these instructions. For your own installation,
 obtain Parse 1.6.4 separately and follow [installation and references](docs/INSTALLATION.md).
 Edit the copied YAML's environment, paths, libraries, kit/chemistry and guide

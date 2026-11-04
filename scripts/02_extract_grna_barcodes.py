@@ -375,7 +375,16 @@ def main():
         lib_stats = Counter()
         reads_left = max_reads
 
+        try:
+            from scripts.grna_recovery import ReservoirWriter, settings as recovery_settings
+        except ModuleNotFoundError:
+            from grna_recovery import ReservoirWriter, settings as recovery_settings
+        recovery_options = recovery_settings(cfg)
+        reservoir = None
         with gzip.open(output_path, 'wt') as fout:
+            if recovery_options['mode'] in ('auto', 'audit'):
+                reservoir = ReservoirWriter(fout, recovery_options['sample_reads'], recovery_options['seed'])
+                fout = reservoir
             # Write header
             fout.write("read_id\tbc_wells\tbc_bci\tumi\tr1_seq\tr1_qual\n")
 
@@ -398,6 +407,10 @@ def main():
                 if max_reads > 0:
                     reads_left -= stats.get('total_reads', 0)
 
+        if reservoir is not None:
+            reservoir.save(Path(output_path).parent / f'{lib_name}_recovery_sample.tsv.gz', output_path,
+                           {'r1_files': [str(path) for path in r1_files], 'max_reads': max_reads,
+                            'scope': 'accepted_barcode_reads'})
         all_stats[lib_name] = dict(lib_stats)
 
         # Print summary

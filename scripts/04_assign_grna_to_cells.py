@@ -57,6 +57,27 @@ def _resolve_gex_match_path(output_dir, namespace, lib_name):
     return None
 
 
+def _recovery_flag(row):
+    if getattr(row, 'recovery_class', 'baseline') == 'baseline':
+        return 1
+    length = getattr(row, 'recovery_length_state', 'uncertain')
+    return {'intact': 2, 'shortened_only': 4, 'uncertain': 8}.get(length, 8)
+
+
+def _recovery_counts(flags, cluster_map):
+    """Annotate the same UMI clusters used for counts; never split by evidence."""
+    clusters = defaultdict(int)
+    for umi, root in cluster_map.items():
+        clusters[root] |= flags.get(umi, 1)
+    return {
+        'recovery_umi_baseline_only': sum(value == 1 for value in clusters.values()),
+        'recovery_umi_rescue_only': sum(not (value & 1) for value in clusters.values()),
+        'recovery_umi_mixed': sum(bool(value & 1) and value != 1 for value in clusters.values()),
+        'recovery_umi_shortened_only': sum(value == 4 for value in clusters.values()),
+        'recovery_umi_length_uncertain': sum(bool(value & 8) or bool(value & 2 and value & 4) for value in clusters.values()),
+    }
+
+
 def stream_library_umi_dedup(match_path, lib_name, sample_name, sublib_index,
                              group_cols, max_umi_edits=1, min_reads_per_umi=1,
                              chunk_size=500_000):
@@ -78,6 +99,12 @@ def stream_library_umi_dedup(match_path, lib_name, sample_name, sublib_index,
     if 'ibar_seq_unresolved' in group_cols and 'ibar_seq' not in needed_cols:
         needed_cols.append('ibar_seq')
 
+    header = pd.read_csv(match_path, sep='\t', nrows=0).columns
+    has_recovery = 'recovery_class' in header
+    if has_recovery:
+        needed_cols += ['recovery_class', 'recovery_length_state', 'recovery_policy_fingerprint']
+    recovery_flags = defaultdict(dict)
+    policy_fingerprints = set()
     # Accumulate UMI counts: {group_key_tuple: {umi_string: read_count}}
     umi_accum = defaultdict(Counter)
     total_reads = 0
@@ -110,6 +137,11 @@ def stream_library_umi_dedup(match_path, lib_name, sample_name, sublib_index,
         for row in chunk.itertuples(index=False):
             key = tuple(getattr(row, c) for c in group_cols)
             umi_accum[key][row.umi] += 1
+            if has_recovery:
+                recovery_flags[key][row.umi] = recovery_flags[key].get(row.umi, 0) | _recovery_flag(row)
+                policy_fingerprints.add(row.recovery_policy_fingerprint)
+                if len(policy_fingerprints) > 1:
+                    raise ValueError('One library contains multiple frozen recovery policies')
 
         if chunks_read % 20 == 0:
             elapsed = time.time() - t0
@@ -156,10 +188,11 @@ def stream_library_umi_dedup(match_path, lib_name, sample_name, sublib_index,
         n_umis_pre = len(umi_counts)
         total_umis_after_filter += n_umis_pre
         if max_umi_edits > 0:
-            n_clusters = _directional_umi_collapse(dict(umi_counts),
-                                                   max_edits=max_umi_edits)
+            cluster_map = _directional_umi_cluster_map(dict(umi_counts), max_edits=max_umi_edits)
+            n_clusters = len(set(cluster_map.values()))
         else:
             n_clusters = len(umi_counts)
+            cluster_map = {umi: umi for umi in umi_counts}
         total_umis_after_collapse += n_clusters
 
         row = dict(zip(group_cols, group_key))
@@ -168,6 +201,9 @@ def stream_library_umi_dedup(match_path, lib_name, sample_name, sublib_index,
         row['read_count'] = sum(umi_counts.values())
         row['sublibrary'] = lib_name
         row['sample_name'] = sample_name
+        if has_recovery:
+            row.update(_recovery_counts(recovery_flags[group_key], cluster_map))
+            row['recovery_policy_fingerprint'] = next(iter(policy_fingerprints), '')
         records.append(row)
 
     # Free the large accumulator
@@ -215,6 +251,7 @@ def stream_library_umi_dedup_sources(
     min_reads_per_umi=1,
     require_resolved_ibar_sources=None,
     chunk_size=500_000,
+    deduplicate_shared_reads=True,
 ):
     """Collapse read evidence from multiple sources in one UMI accumulator.
 
@@ -234,6 +271,10 @@ def stream_library_umi_dedup_sources(
     require_resolved_ibar_sources = set(require_resolved_ibar_sources or ())
     source_paths = [(str(source), str(path)) for source, path in source_paths]
     source_names = [source for source, _ in source_paths]
+    recovery_flags = defaultdict(dict)
+    policy_fingerprints = set()
+    has_recovery = any('recovery_class' in pd.read_csv(path, sep='\t', nrows=0).columns for _, path in source_paths)
+
     if len(source_names) != len(set(source_names)):
         raise ValueError(f"Duplicate evidence source names: {source_names}")
 
@@ -242,6 +283,18 @@ def stream_library_umi_dedup_sources(
     )
     if 'ibar_seq_unresolved' in group_cols and 'ibar_seq' not in needed_cols:
         needed_cols.append('ibar_seq')
+
+    # Only IDs appearing in a secondary source need a cross-source read index.
+    # Keep 128-bit digests rather than long instrument names. Molecule counting
+    # below remains joint across every source and every recovery class.
+    import hashlib
+    duplicate_candidates = set()
+    seen_shared_reads = {}
+    seen_shared_sources = defaultdict(set)
+    if has_recovery and deduplicate_shared_reads and len(source_paths) > 1:
+        for _, path in source_paths[1:]:
+            for chunk in pd.read_csv(path, sep='\t', usecols=['read_id'], chunksize=chunk_size, dtype=str):
+                duplicate_candidates.update(hashlib.blake2b(value.encode(), digest_size=16).digest() for value in chunk.read_id)
 
     # group -> UMI -> total reads; and group -> UMI -> source -> reads
     umi_accum = defaultdict(Counter)
@@ -258,6 +311,11 @@ def stream_library_umi_dedup_sources(
                 f"{source} match file {match_path} is missing columns: {missing}"
             )
         read_cols = list(needed_cols)
+        source_has_recovery = 'recovery_class' in header_cols
+        if has_recovery and len(source_paths) > 1:
+            read_cols.append('read_id')
+        if source_has_recovery:
+            read_cols += ['recovery_class', 'recovery_length_state', 'recovery_policy_fingerprint']
         if source in require_resolved_ibar_sources:
             if 'ibar_seq_corrected' not in header_cols:
                 raise ValueError(
@@ -301,7 +359,31 @@ def stream_library_umi_dedup_sources(
             for row in chunk.itertuples(index=False):
                 key = tuple(getattr(row, c) for c in group_cols)
                 umi = row.umi
-                umi_accum[key][umi] += 1
+                duplicate = False
+                if duplicate_candidates:
+                    read_key = hashlib.blake2b(str(row.read_id).encode(), digest_size=16).digest()
+                    if read_key in duplicate_candidates:
+                        identity = (key, umi)
+                        previous = seen_shared_reads.get(read_key)
+                        if previous is not None:
+                            if previous != identity:
+                                raise ValueError('Shared read ID has conflicting guide/cell/UMI assignments')
+                            duplicate = True
+                            source_stats[source]['duplicate_shared_reads'] += 1
+                        else:
+                            seen_shared_reads[read_key] = identity
+                if not duplicate:
+                    umi_accum[key][umi] += 1
+                if has_recovery:
+                    recovery_flags[key][umi] = recovery_flags[key].get(umi, 0) | _recovery_flag(row)
+                if source_has_recovery:
+                    policy_fingerprints.add(row.recovery_policy_fingerprint)
+                    if len(policy_fingerprints) > 1:
+                        raise ValueError('Evidence sources must reuse the same frozen recovery policy')
+                if duplicate and source in seen_shared_sources[read_key]:
+                    continue
+                if duplicate_candidates and read_key in duplicate_candidates:
+                    seen_shared_sources[read_key].add(source)
                 per_umi = source_accum[key].setdefault(umi, Counter())
                 per_umi[source] += 1
 
@@ -313,7 +395,7 @@ def stream_library_umi_dedup_sources(
             total_umis_raw += 1
 
     records = []
-    total_reads = sum(s['eligible_reads'] for s in source_stats.values())
+    total_reads = sum(s['eligible_reads'] - s['duplicate_shared_reads'] for s in source_stats.values())
     total_umis_after_filter = 0
     total_umis_after_collapse = 0
     umis_filtered = 0
@@ -358,6 +440,9 @@ def stream_library_umi_dedup_sources(
 
         row = dict(zip(group_cols, group_key))
         row['umi_count'] = len(union_roots)
+        if has_recovery:
+            row.update(_recovery_counts(recovery_flags[group_key], union_map))
+            row['recovery_policy_fingerprint'] = next(iter(policy_fingerprints), '')
         row['umi_count_raw'] = len(union_counts)
         row['read_count'] = sum(union_counts.values())
         row['sublibrary'] = lib_name
@@ -1510,6 +1595,8 @@ def _stream_assignment_product(
                     group_cols=group_cols,
                     max_umi_edits=max_umi_edits,
                     min_reads_per_umi=min_reads_per_umi,
+                    # Audit must preserve standard counts, including source copies.
+                    deduplicate_shared_reads=(cfg.get('grna_recovery') or {}).get('mode') != 'audit',
                     require_resolved_ibar_sources=(
                         {'gex'} if dual_mode else set()
                     ),
@@ -1618,6 +1705,15 @@ def _write_assignment_product(product, output_dir, gex_namespace):
         index=False,
         compression='gzip',
     )
+    recovery_cols = [c for c in product['deduped'] if c.startswith('recovery_umi_')]
+    if recovery_cols:
+        product['deduped'].groupby('bc_wells')[recovery_cols].sum().to_csv(
+            os.path.join(assign_dir, f'grna_recovery_cells_{mode}.csv.gz'), compression='gzip')
+    elif Path(assign_dir, f'grna_recovery_cells_{mode}.csv.gz').exists():
+        # Rebuilding counts without recovery must not retain an older summary.
+        pd.DataFrame(columns=['bc_wells']).to_csv(
+            os.path.join(assign_dir, f'grna_recovery_cells_{mode}.csv.gz'),
+            index=False, compression='gzip')
     mmwrite(os.path.join(assign_dir, names['matrix']), product['matrix'])
     pd.Series(product['barcodes']).to_csv(
         os.path.join(assign_dir, names['barcodes']), index=False, header=False

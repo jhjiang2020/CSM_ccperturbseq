@@ -48,6 +48,25 @@ def load_design_metadata(output_dir, libraries):
     return metadata
 
 
+def attach_recovery_metadata(adata, output_dir, libraries, gex_namespace='gex_grna_identity'):
+    """Attach guide-evidence provenance without touching expression counts."""
+    recovery_policies = {}
+    for library in libraries:
+        name = library['sublibrary_name']
+        path = Path(output_dir) / 'grna_matches' / f'{name}_recovery.json'
+        if path.is_file():
+            recovery_policies[name] = path.read_text()
+    if recovery_policies:
+        adata.uns['grna_recovery_policies'] = recovery_policies
+    for source in ('dedicated', 'combined', 'gex'):
+        base = Path(output_dir) / (gex_namespace if source == 'gex' else '') / 'grna_assignment'
+        path = base / f'grna_recovery_cells_{source}.csv.gz'
+        if path.is_file():
+            recovery_cells = pd.read_csv(path, index_col='bc_wells')
+            for column in recovery_cells:
+                adata.obs[f'{source}_{column}'] = recovery_cells[column].reindex(adata.obs_names).fillna(0).astype(int)
+
+
 def _guide_product_paths(output_dir, source, gex_namespace='gex_grna_identity'):
     """Return the matrix/assignment paths for one Step 4 evidence product."""
     assign_dir = Path(output_dir) / 'grna_assignment'
@@ -580,6 +599,8 @@ def main():
         from scripts.guide_design import enabled
     except ModuleNotFoundError:
         from guide_design import enabled
+    if (cfg.get('grna_recovery') or {}).get('mode', 'off') not in ('off', False):
+        attach_recovery_metadata(adata, output_dir, cfg['libraries'], gex_namespace)
     design_metadata = load_design_metadata(output_dir, cfg['libraries']) if enabled(cfg) else {}
     if design_metadata:
         adata.uns['guide_design'] = design_metadata

@@ -322,6 +322,27 @@ def main():
         f"({n_processes} scheduler slots available)"
     )
     warn_if_ibar_unobservable(config, manifest)
+    recovery = config.get('grna_recovery', {}) or {}
+    if recovery.get('mode', 'off') not in ('off', False) and not recovery.get('resolved_contract'):
+        frozen = Path(config['paths']['output_dir']) / 'grna_matches' / f'{args.library}_recovery.json'
+        if not frozen.is_file():
+            raise ValueError('Run dedicated-gRNA recovery preflight first; Step 1c must reuse its frozen policy')
+        import copy
+        effective_config = copy.deepcopy(config)
+        frozen_metadata = json.loads(frozen.read_text())
+        unavailable = str(frozen_metadata.get('status', '')).startswith('unavailable_')
+        if unavailable:
+            effective_config['grna_recovery']['mode'] = 'off'
+            print(f"Step 1c recovery unavailable: {frozen_metadata['status']}; retaining baseline parsing")
+        else:
+            effective_config['grna_recovery']['resolved_contract'] = str(frozen)
+        design_path = (effective_config.get('guide_design') or {}).get('resolved_contract')
+        if design_path and not Path(design_path).expanduser().is_absolute():
+            effective_config['guide_design']['resolved_contract'] = str(config_path.parent / design_path)
+        effective_path = namespace_root / 'configs' / f'{args.library}_recovery.yaml'
+        effective_path.parent.mkdir(parents=True, exist_ok=True)
+        effective_path.write_text(yaml.safe_dump(effective_config, sort_keys=False))
+        step3[step3.index('--config') + 1] = str(effective_path)
     subprocess.run(step3, check=True)
 
     barcode_output = barcode_input

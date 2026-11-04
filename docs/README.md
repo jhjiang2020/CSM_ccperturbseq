@@ -1,4 +1,4 @@
-# v2.0 documentation index
+# v2.1 documentation index
 
 For a new run, begin with the [quick start](QUICKSTART.md). The pipeline does
 not require access to the rgupta shared folder. Shared software/reference paths
@@ -22,6 +22,7 @@ own storage and Parse-provided software.
 | [Sequencing scenarios](ILLUMINA_100_CYCLE_SEQUENCING.md) | Read reach, short-GEX versus short-guide decisions and compatible identity models. |
 | [Preflight and scaling](SCALABILITY_AND_PREFLIGHT.md) | iBAR diagnostics, CPU/memory controls and stage-specific constraints. |
 | [Asymmetric guide designs](ASYMMETRIC_GUIDE_DESIGNS.md) | Optional position-specific iBARs, no-iBAR constructs, design capabilities and validated pilots. |
+| [v2.1 guide recovery](GRNA_RECOVERY_V2_1_EVIDENCE.md) | Rationale, standard-versus-relaxed parameters, opt-in/automatic settings and technical/biological pilot evidence. |
 | [Migration](MIGRATING_TO_V2.md) | Preserve old results, choose new namespaces and rebuild affected stages. |
 | [Release notes](../RELEASE_NOTES.md) | Versioned changes; historical entries describe their original releases. |
 

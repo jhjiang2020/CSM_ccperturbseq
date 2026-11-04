@@ -1,5 +1,25 @@
 # Release Notes
 
+## v2.1 (2026-11-04)
+
+- Added opt-in guide recovery using the joint TSO, spacer and scaffold layout.
+  Shortening is limited relative to each reference guide; ambiguous identities
+  remain unresolved. Existing successful read calls are preserved.
+- Added automatic settings from a bounded whole-library sample, held-out
+  cell/UMI validation and frozen policies. iBAR corroboration is optional;
+  it does not determine spacer identity.
+- Added recovery provenance through joint UMI counting and AnnData, with
+  support for asymmetric and absent iBARs. Step 1c reuses the dedicated policy.
+- Added a full opt-in preset combining relaxed matching with GEX guide identity
+  recovery and source merging; standard presets retain both switches off.
+- Recovery-enabled submissions order Step 1c after the dedicated frozen policy;
+  audit mode preserves standard counts. Unquoted YAML `off` is accepted.
+- See the [consolidated configuration and evidence guide](docs/GRNA_RECOVERY_V2_1_EVIDENCE.md).
+  The full benchmark adds 4,931,644 reads and 437 assigned cells, with 127 net
+  additional singlets. Primary knockdown validation is inconclusive, so recovery
+  remains off when unspecified and the recommended starting preset is audit-only.
+  Synthetic accuracy is not a real-read purity estimate.
+
 ## v2.0 (2026-10-23)
 
 ### Asymmetric guide designs

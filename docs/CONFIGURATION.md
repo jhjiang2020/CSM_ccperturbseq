@@ -1,4 +1,4 @@
-# v2.0 configuration reference
+# v2.1 configuration reference
 
 Start with `config_dual.yaml` or `config_single.yaml`, copy it under a run-specific
 name, and edit the copy. The public files are complete examples with lab-specific
@@ -24,7 +24,7 @@ for their output semantics and read-layout requirements.
 | --- | --- | --- |
 | `environment.conda_prefix` | Workers | Conda base containing `condabin/conda`; shared standalone prefix is a documented exception. |
 | `environment.conda_env` | Workers | Production `splitpipe` environment name or absolute prefix. |
-| `paths.project_dir` | Workers | Absolute v2.0 checkout path; determines the scripts actually executed. |
+| `paths.project_dir` | Workers | Absolute pipeline checkout path; determines the scripts actually executed. |
 | `paths.fastq_dir` | Steps 1a/2 and raw-read QC | Your paired FASTQ directory. |
 | `paths.splitpipe_dir` | Steps 1a/1b, barcode decoding and QC | Pristine Parse 1.6.4 distribution. |
 | `paths.genome_dir` | Step 1 and controlled QC | split-pipe-generated reference directory: canonical gene metadata for both backends, plus the alignment index used by STAR. |
@@ -96,6 +96,20 @@ stem/tracr anchors and iBAR length against the construct. Do not turn off iBARs
 merely to suppress orientation warnings in a dual-guide analysis.
 [Read-length scenarios](ILLUMINA_100_CYCLE_SEQUENCING.md) and
 [bounded reference preflight](SCALABILITY_AND_PREFLIGHT.md) explain those choices.
+
+## Optional v2.1 guide recovery
+
+`grna_recovery.mode` defaults to `off`. Merge the
+[audit overlay](../examples/grna_recovery_v2_1.yaml) into a complete config;
+select `auto` to enable recovery after data-driven validation or `manual` for
+fixed limits. The [full opt-in preset](../examples/grna_recovery_v2_1_enabled.yaml)
+also enables `gex_decontamination.step1c.enabled` and
+`gex_decontamination.combine_with_grna_arm.enabled` so accepted GEX guide reads
+contribute to final calls. This requires the v2.1 scripts, not just a YAML edit in v2.0.
+The [consolidated guide](GRNA_RECOVERY_V2_1_EVIDENCE.md) lists every changed
+parameter, how to freeze/reuse the policy, and the measured technical and
+biological gains. Existing general guide matching, UMI correction and cell
+assignment thresholds are retained.
 
 ## Step 1a: GEX backend, assignment and UMI correction
 

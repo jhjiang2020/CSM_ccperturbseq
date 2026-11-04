@@ -28,6 +28,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -43,10 +44,12 @@ try:
     from scripts.grna_preflight import check_ibar_reference, preflight_options, print_preflight
     from scripts.guide_design import DESIGN_COLUMNS, DesignMatcher, compile_design, emit_warnings, enabled, extract_unit
     from scripts.design_preflight import check_design
+    from scripts import grna_recovery
 except ModuleNotFoundError:
     from grna_preflight import check_ibar_reference, preflight_options, print_preflight
     from guide_design import DESIGN_COLUMNS, DesignMatcher, compile_design, emit_warnings, enabled, extract_unit
     from design_preflight import check_design
+    import grna_recovery
 
 
 def resolve_output_root(output_dir, output_namespace=None):
@@ -716,6 +719,13 @@ def _init_worker(config_dict):
     This avoids pickle-serializing the matchers and lookup dicts with every
     chunk, and avoids rebuilding NeighborhoodMatcher ~300 times.
     """
+    _worker_state['recovery'] = None
+    if config_dict.get('recovery_contract'):
+        RecoveryEngine = grna_recovery.RecoveryEngine
+        _worker_state['recovery'] = RecoveryEngine(config_dict['recovery_contract'], config_dict['tso_seq'],
+                                                   config_dict['anchor_max_mm'], config_dict['recovery_options'])
+        _worker_state['recovery_options'] = config_dict['recovery_options']
+        _worker_state['recovery_policy'] = config_dict['recovery_policy']
     _worker_state['design_contract'] = config_dict.get('design_contract')
     if config_dict.get('design_contract'):
         _worker_state['design_matcher'] = DesignMatcher(config_dict['design_contract'])
@@ -858,7 +868,7 @@ def _process_design_rows(rows):
     return results, discarded, stats
 
 
-def _process_rows(rows):
+def _process_rows_baseline(rows):
     """Process a list of (read_id, bc_wells, bc_bci, umi, r1_seq) tuples.
 
     Uses worker-local state initialized by _init_worker.
@@ -1169,6 +1179,56 @@ def _process_rows(rows):
     return results, discarded, stats
 
 
+def _process_rows(rows):
+    """Preserve baseline calls; recover only reads absent from baseline output."""
+    results, discarded, stats = _process_rows_baseline([row[:5] for row in rows])
+    state = _worker_state
+    recovery = state.get('recovery')
+    if not recovery:
+        return results, discarded, stats
+    BASELINE_METADATA, RECOVERY_COLUMNS = grna_recovery.BASELINE_METADATA, grna_recovery.RECOVERY_COLUMNS
+    policy = state['recovery_policy']
+    matched = {row[0] for row in results}
+    results = [tuple(row) + BASELINE_METADATA + (policy['fingerprint'],) for row in results]
+    recovered_ids = set()
+    audited_ids = set()
+    audit = state['recovery_options']['mode'] == 'audit'
+    if not policy['effective'].get('enabled', True):
+        stats['recovery_disabled_reads'] += len(rows) - len(matched)
+        return results, discarded, stats
+    for row in rows:
+        read_id, bc, bci, umi, sequence = row[:5]
+        if read_id in matched:
+            continue
+        quality = row[5] if len(row) > 5 else None
+        endpoint, _ = find_tso(sequence, state['tso_seq'], state['tso_max_dist'])
+        resolved, reason = recovery.match(sequence, quality, policy['effective'], endpoint)
+        stats['recovery_' + reason] += 1
+        if resolved is None:
+            continue
+        resolved['recovery_policy_fingerprint'] = policy['fingerprint']
+        if audit:
+            audited_ids.add(read_id)
+            discarded.append((read_id, bc, bci, umi, sequence, resolved['grna_seq'],
+                              resolved['ibar_seq'], 'recovery_audit:' + json.dumps(resolved, separators=(',', ':'))))
+            continue
+        recovered_ids.add(read_id)
+        stats['recovery_class_' + resolved['recovery_class']] += 1
+        stats['recovery_length_' + resolved['recovery_length_state']] += 1
+        result = (read_id, bc, bci, umi, resolved['grna_name'], resolved['grna_seq'],
+                  resolved['ibar_seq'], resolved['target_gene'], 0, resolved['ibar_dist'],
+                  'recovery_' + resolved['recovery_class'], resolved['variant'], resolved['grna_length'],
+                  resolved['pair_id'], resolved['target_combo'], resolved['ibar_seq_corrected'], resolved['ibar_decoupled'])
+        if state.get('design_contract'):
+            result += tuple(resolved[column] for column in DESIGN_COLUMNS)
+        elif state.get('short_read_mode'):
+            result += (False, False, resolved['grna_length'])
+        results.append(result + tuple(resolved[column] for column in RECOVERY_COLUMNS))
+    discarded = [row for row in discarded if row[0] not in recovered_ids and (row[0] not in audited_ids or row[7].startswith('recovery_audit:'))]
+    stats['recovery_added_reads'] += len(recovered_ids)
+    return results, discarded, stats
+
+
 # Keep backward-compatible wrapper for single-process mode
 def process_chunk(args):
     """Process a chunk of barcode TSV data (single-process mode)."""
@@ -1182,15 +1242,18 @@ def process_chunk(args):
         chunk_df['read_id'], chunk_df['bc_wells'], chunk_df['bc_bci'],
         chunk_df['umi'], chunk_df['r1_seq'],
     ))
+    if config_dict.get('recovery_contract'):
+        qualities = chunk_df.get('r1_qual', pd.Series([''] * len(chunk_df)))
+        rows = [row + (quality,) for row, quality in zip(rows, qualities)]
     results, discarded, stats = _process_rows(rows)
     return results, discarded, stats
 
 
-def _chunk_generator(barcode_tsv_path, chunk_size):
+def _chunk_generator(barcode_tsv_path, chunk_size, include_quality=False):
     """Yield lightweight row-tuples from a (possibly gzipped) TSV, in chunks."""
     for chunk_df in pd.read_csv(
         barcode_tsv_path, sep='\t', chunksize=chunk_size,
-        usecols=['read_id', 'bc_wells', 'bc_bci', 'umi', 'r1_seq'],
+        usecols=lambda c: c in ['read_id', 'bc_wells', 'bc_bci', 'umi', 'r1_seq'] + (['r1_qual'] if include_quality else []),
         dtype=str, keep_default_na=False,
     ):
         rows = list(zip(
@@ -1200,6 +1263,8 @@ def _chunk_generator(barcode_tsv_path, chunk_size):
             chunk_df['umi'].values,
             chunk_df['r1_seq'].values,
         ))
+        if include_quality:
+            rows = [row + (quality,) for row, quality in zip(rows, chunk_df.get('r1_qual', [''] * len(rows)))]
         yield rows
 
 
@@ -1290,6 +1355,10 @@ def process_library(barcode_tsv_path, output_path, config_dict, n_processes=1,
     if config_dict.get('design_contract'):
         output_cols = OUTPUT_COLS + DESIGN_COLUMNS
 
+    if config_dict.get('recovery_contract'):
+        RECOVERY_COLUMNS = grna_recovery.RECOVERY_COLUMNS
+        output_cols = output_cols + RECOVERY_COLUMNS
+
     # Failed reads output path (companion to main output)
     discarded_path = None
     if save_failed:
@@ -1317,7 +1386,7 @@ def process_library(barcode_tsv_path, output_path, config_dict, n_processes=1,
             if fout_failed:
                 fout_failed.write('\t'.join(FAILED_COLS) + '\n')
 
-            for i, rows in enumerate(_chunk_generator(barcode_tsv_path, chunk_size)):
+            for i, rows in enumerate(_chunk_generator(barcode_tsv_path, chunk_size, bool(config_dict.get('recovery_contract')))):
                 results, discarded, stats = _process_rows(rows)
                 total_stats += stats
 
@@ -1335,7 +1404,7 @@ def process_library(barcode_tsv_path, output_path, config_dict, n_processes=1,
                 processed = total_stats['total_reads']
                 elapsed = time.time() - t_start
                 rate = processed / elapsed if elapsed > 0 else 0
-                matched = total_stats['exact_match'] + total_stats['fuzzy_match'] + total_stats['grna_only_match']
+                matched = total_stats['exact_match'] + total_stats['fuzzy_match'] + total_stats['grna_only_match'] + total_stats.get('recovery_added_reads', 0)
                 match_pct = matched / processed * 100 if processed > 0 else 0
                 print(f"    Chunk {i+1}: {processed:,} reads "
                       f"({rate:,.0f}/s, {match_pct:.1f}% matched)", flush=True)
@@ -1356,7 +1425,7 @@ def process_library(barcode_tsv_path, output_path, config_dict, n_processes=1,
                 fout_failed.write('\t'.join(FAILED_COLS) + '\n')
 
             chunks_done = 0
-            chunk_iter = _chunk_generator(barcode_tsv_path, chunk_size)
+            chunk_iter = _chunk_generator(barcode_tsv_path, chunk_size, bool(config_dict.get('recovery_contract')))
 
             for results, discarded, stats in _bounded_results(
                 pool, _process_rows, chunk_iter, max_pending=2 * n_processes
@@ -1381,7 +1450,7 @@ def process_library(barcode_tsv_path, output_path, config_dict, n_processes=1,
                     rate = processed / elapsed if elapsed > 0 else 0
                     matched = (total_stats['exact_match'] +
                                total_stats['fuzzy_match'] +
-                               total_stats['grna_only_match'])
+                               total_stats['grna_only_match'] + total_stats.get('recovery_added_reads', 0))
                     match_pct = matched / processed * 100 if processed > 0 else 0
                     print(f"    Chunks {chunks_done}: "
                           f"{processed:,} reads ({rate:,.0f}/s, "
@@ -1435,6 +1504,9 @@ def main():
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
+    recovery_path = (cfg.get('grna_recovery') or {}).get('resolved_contract')
+    if recovery_path and not Path(recovery_path).expanduser().is_absolute():
+        cfg['grna_recovery']['resolved_contract'] = str(Path(args.config).resolve().parent / recovery_path)
     ref_df = load_reference(cfg['paths']['grna_reference'])
     if enabled(cfg):
         ref_df = ref_df.fillna('')
@@ -1664,6 +1736,12 @@ def main():
             contract_path.parent.mkdir(parents=True, exist_ok=True)
             with contract_path.open('w') as handle:
                 yaml.safe_dump(config_dict['design_contract'], handle, sort_keys=False)
+        prepare_recovery = grna_recovery.prepare_recovery
+        config_dict.pop('recovery_contract', None)
+        if grna_recovery.settings(cfg)['mode'] == 'auto':
+            _init_worker(config_dict)
+        prepare_recovery(cfg, ref_df.fillna(''), config_dict, barcode_tsv,
+                         Path(output_dir) / 'grna_matches', lib_name, raw_fastq=bool(args.preflight_fastq), baseline_processor=_process_rows_baseline)
         if args.preflight_only:
             continue
 
@@ -1703,7 +1781,7 @@ def main():
         exact = stats.get('exact_match', 0)
         fuzzy = stats.get('fuzzy_match', 0)
         grna_only = stats.get('grna_only_match', 0)
-        total_matched = exact + fuzzy + grna_only
+        total_matched = exact + fuzzy + grna_only + stats.get('recovery_added_reads', 0)
 
         print(f"\n  Summary for {lib_name}:")
         print(f"    Total reads:        {total:>12,}")

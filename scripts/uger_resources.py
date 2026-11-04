@@ -379,6 +379,31 @@ def pipeline(config_path, steps, dry_run):
         ('4', 'step4', 'csm_step4_assign', 'submit_step4_assign.sh', False, ['step3', 'step1c_aggregate']),
         ('5', 'step5', 'csm_step5_anndata', 'submit_step5_anndata.sh', False, ['step1b', 'step4']),
     ]
+    recovery = cfg.get('grna_recovery', {}) or {}
+    recovery_mode = recovery.get('mode', 'off')
+    if recovery_mode is False:  # YAML's unquoted off
+        recovery_mode = 'off'
+    if recovery_mode not in ('off', 'audit', 'auto', 'manual'):
+        raise ValueError('Invalid grna_recovery.mode')
+    if enabled and recovery_mode != 'off' and '1' in selected:
+        if '3' not in selected:
+            frozen = recovery.get('resolved_contract')
+            if frozen:
+                policy = Path(frozen).expanduser()
+                policies = [policy if policy.is_absolute() else Path(config_path).parent / policy]
+            else:
+                output = Path(cfg['paths']['output_dir'])
+                policies = [output / 'grna_matches' / f"{lib['sublibrary_name']}_recovery.json"
+                            for lib in cfg['libraries']]
+            missing = [str(path) for path in policies if not path.is_file()]
+            if missing:
+                raise ValueError('Step 1c recovery needs a frozen dedicated policy; include Step 3 '
+                                 'or run its preflight first. Missing: ' + ', '.join(missing))
+        # Submit Step 3 first so Step 1c can hold its exact job ID and reuse
+        # that library's frozen policy. Standard-mode ordering stays unchanged.
+        first, combine, gex, aggregate, barcodes, match, assign, integrate = stages
+        gex = (*gex[:-1], ['step1a', 'step3'])
+        stages = [first, combine, barcodes, match, gex, aggregate, assign, integrate]
     print(f'Config: {config_path}\nProject: {project}\nLibraries: {count}\nLogs: {logs}')
     for group, profile, name, script, array, dependencies in stages:
         if group == '1c':
