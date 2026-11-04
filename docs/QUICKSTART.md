@@ -1,4 +1,4 @@
-# v2.0 quick start
+# v2.1 quick start
 
 This guide gets paired GEX and dedicated-guide FASTQs to
 `combined_adata.h5ad`. The defaults are **STAR, Parse GEX UMI correction and
@@ -126,6 +126,17 @@ own run config.
 Use absolute values for production paths. YAML does not expand shell variables
 such as `${PROJECT_DIR}`. See [configuration details](CONFIGURATION.md) for
 matching options and naming constraints.
+
+**Optional improved guide recovery:** the copied config already contains an
+annotated `grna_structure.relaxed_structure` entry. Leave it `false` for standard
+matching, or set it to `auto` to discover one conservative policy for all
+sublibraries. Enable the existing `gex_decontamination.step1c.enabled` and
+`gex_decontamination.combine_with_grna_arm.enabled` entries if captured GEX guide
+reads should also contribute. Set these once here; the normal launcher handles
+the pilot, matching and joint counting. See the [parameter block, measured gains
+and tradeoffs](GRNA_RECOVERY_V2_1_EVIDENCE.md#configure-once). A completed run can
+opt in later with `--step 3,4,5`; [read the restart warnings](GRNA_RECOVERY_V2_1_EVIDENCE.md#run-or-restart)
+about config hashes and rebuilding AnnData annotations first.
 
 For two sublibraries from one biological sample, the library section might be:
 

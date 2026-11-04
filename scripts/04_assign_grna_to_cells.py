@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import sys
 from collections import Counter, defaultdict
@@ -57,7 +58,19 @@ def _resolve_gex_match_path(output_dir, namespace, lib_name):
     return None
 
 
+def _structure_detail(row):
+    raw = getattr(row, 'structure_correction', '')
+    return json.loads(raw) if isinstance(raw, str) and raw else {}
+
+
+def _recovery_fingerprint(row):
+    return _structure_detail(row).get('policy', getattr(row, 'recovery_policy_fingerprint', ''))
+
+
 def _recovery_flag(row):
+    if hasattr(row, 'structure_correction'):
+        detail = _structure_detail(row)
+        return {'intact': 2, 'shortened_only': 4, 'uncertain': 8}.get(detail.get('length'), 1)
     if getattr(row, 'recovery_class', 'baseline') == 'baseline':
         return 1
     length = getattr(row, 'recovery_length_state', 'uncertain')
@@ -100,9 +113,10 @@ def stream_library_umi_dedup(match_path, lib_name, sample_name, sublib_index,
         needed_cols.append('ibar_seq')
 
     header = pd.read_csv(match_path, sep='\t', nrows=0).columns
-    has_recovery = 'recovery_class' in header
+    compact_recovery = 'structure_correction' in header
+    has_recovery = compact_recovery or 'recovery_class' in header
     if has_recovery:
-        needed_cols += ['recovery_class', 'recovery_length_state', 'recovery_policy_fingerprint']
+        needed_cols += ['structure_correction'] if compact_recovery else ['recovery_class', 'recovery_length_state', 'recovery_policy_fingerprint']
     recovery_flags = defaultdict(dict)
     policy_fingerprints = set()
     # Accumulate UMI counts: {group_key_tuple: {umi_string: read_count}}
@@ -139,7 +153,8 @@ def stream_library_umi_dedup(match_path, lib_name, sample_name, sublib_index,
             umi_accum[key][row.umi] += 1
             if has_recovery:
                 recovery_flags[key][row.umi] = recovery_flags[key].get(row.umi, 0) | _recovery_flag(row)
-                policy_fingerprints.add(row.recovery_policy_fingerprint)
+                if _recovery_fingerprint(row):
+                    policy_fingerprints.add(_recovery_fingerprint(row))
                 if len(policy_fingerprints) > 1:
                     raise ValueError('One library contains multiple frozen recovery policies')
 
@@ -202,8 +217,12 @@ def stream_library_umi_dedup(match_path, lib_name, sample_name, sublib_index,
         row['sublibrary'] = lib_name
         row['sample_name'] = sample_name
         if has_recovery:
-            row.update(_recovery_counts(recovery_flags[group_key], cluster_map))
-            row['recovery_policy_fingerprint'] = next(iter(policy_fingerprints), '')
+            correction = _recovery_counts(recovery_flags[group_key], cluster_map)
+            correction['recovery_policy_fingerprint'] = next(iter(policy_fingerprints), '')
+            if compact_recovery:
+                row['structure_correction'] = json.dumps(correction, separators=(',', ':'))
+            else:
+                row.update(correction)
         records.append(row)
 
     # Free the large accumulator
@@ -273,7 +292,9 @@ def stream_library_umi_dedup_sources(
     source_names = [source for source, _ in source_paths]
     recovery_flags = defaultdict(dict)
     policy_fingerprints = set()
-    has_recovery = any('recovery_class' in pd.read_csv(path, sep='\t', nrows=0).columns for _, path in source_paths)
+    headers = [pd.read_csv(path, sep='\t', nrows=0).columns for _, path in source_paths]
+    compact_recovery = any('structure_correction' in header for header in headers)
+    has_recovery = compact_recovery or any('recovery_class' in header for header in headers)
 
     if len(source_names) != len(set(source_names)):
         raise ValueError(f"Duplicate evidence source names: {source_names}")
@@ -311,11 +332,12 @@ def stream_library_umi_dedup_sources(
                 f"{source} match file {match_path} is missing columns: {missing}"
             )
         read_cols = list(needed_cols)
-        source_has_recovery = 'recovery_class' in header_cols
+        source_compact = 'structure_correction' in header_cols
+        source_has_recovery = source_compact or 'recovery_class' in header_cols
         if has_recovery and len(source_paths) > 1:
             read_cols.append('read_id')
         if source_has_recovery:
-            read_cols += ['recovery_class', 'recovery_length_state', 'recovery_policy_fingerprint']
+            read_cols += ['structure_correction'] if source_compact else ['recovery_class', 'recovery_length_state', 'recovery_policy_fingerprint']
         if source in require_resolved_ibar_sources:
             if 'ibar_seq_corrected' not in header_cols:
                 raise ValueError(
@@ -377,7 +399,8 @@ def stream_library_umi_dedup_sources(
                 if has_recovery:
                     recovery_flags[key][umi] = recovery_flags[key].get(umi, 0) | _recovery_flag(row)
                 if source_has_recovery:
-                    policy_fingerprints.add(row.recovery_policy_fingerprint)
+                    if _recovery_fingerprint(row):
+                        policy_fingerprints.add(_recovery_fingerprint(row))
                     if len(policy_fingerprints) > 1:
                         raise ValueError('Evidence sources must reuse the same frozen recovery policy')
                 if duplicate and source in seen_shared_sources[read_key]:
@@ -441,8 +464,12 @@ def stream_library_umi_dedup_sources(
         row = dict(zip(group_cols, group_key))
         row['umi_count'] = len(union_roots)
         if has_recovery:
-            row.update(_recovery_counts(recovery_flags[group_key], union_map))
-            row['recovery_policy_fingerprint'] = next(iter(policy_fingerprints), '')
+            correction = _recovery_counts(recovery_flags[group_key], union_map)
+            correction['recovery_policy_fingerprint'] = next(iter(policy_fingerprints), '')
+            if compact_recovery:
+                row['structure_correction'] = json.dumps(correction, separators=(',', ':'))
+            else:
+                row.update(correction)
         row['umi_count_raw'] = len(union_counts)
         row['read_count'] = sum(union_counts.values())
         row['sublibrary'] = lib_name
@@ -1397,7 +1424,10 @@ def _source_mode_tasks(cfg, output_dir, source_mode, gex_namespace):
         gex_path = _resolve_gex_match_path(output_dir, gex_namespace, lib_name)
         if source_mode == 'dedicated':
             if dedicated_path is None:
-                print(f"  WARNING: Match file not found for {lib_name}")
+                if cfg.get('grna_structure', {}).get('relaxed_structure', False) is not False:
+                    missing.append(f"{lib_name}: dedicated match file")
+                else:
+                    print(f"  WARNING: Match file not found for {lib_name}")
                 continue
             paths = [('dedicated', dedicated_path)]
         elif source_mode == 'gex':
@@ -1528,6 +1558,22 @@ def _stream_assignment_product(
     """Build one dedicated, GEX-only, or union assignment product."""
     tasks = _source_mode_tasks(cfg, output_dir, source_mode, gex_namespace)
     group_cols = _determine_group_cols(tasks[0][0][0][1], dedup_ibar)
+    try:
+        from scripts import relaxed_structure
+    except ModuleNotFoundError:
+        import relaxed_structure
+    shared = None
+    if relaxed_structure.active(cfg):
+        reference = pd.read_csv(cfg['paths']['grna_reference'], keep_default_na=False)
+        shared = relaxed_structure.load(cfg, reference)
+        for paths, library, _, _ in tasks:
+            for _, path in paths:
+                relaxed_structure.check_completion(path, library, shared)
+    elif 'relaxed_structure' in cfg.get('grna_structure', {}):
+        for paths, _, _, _ in tasks:
+            if any('structure_correction' in pd.read_csv(path, sep='\t', nrows=0).columns for _, path in paths):
+                raise ValueError('Relaxed match products remain after disabling the option; rerun Step 3/1c before Step 4')
+    completion = relaxed_structure.assignment_record(cfg, shared, tasks) if 'relaxed_structure' in cfg.get('grna_structure', {}) else None
     if not enabled(cfg) and 'guide_unit_id' in group_cols:
         raise ValueError('Design-aware match outputs require guide_design.enabled; use a separate output directory for legacy runs')
     if enabled(cfg):
@@ -1547,6 +1593,10 @@ def _stream_assignment_product(
             raise ValueError('Libraries/evidence sources resolved incompatible guide designs; inspect orientation pilots')
         if 'guide_unit_id' not in group_cols:
             raise ValueError('guide_design.enabled requires design-aware Step 3 outputs')
+    if shared is not None:
+        # Assign against the same oriented reference used for read matching.
+        # Input-reference validation above still uses the original user table.
+        ref_df = pd.DataFrame(shared['design_contract']['rows'])
     print(f"  Grouping by: {group_cols}")
 
     all_deduped = []
@@ -1629,6 +1679,7 @@ def _stream_assignment_product(
             )
             return {
                 'mode': source_mode,
+                'completion': completion,
                 'deduped': pd.DataFrame(columns=dedup_columns),
                 'assignment': pd.DataFrame(columns=assignment_columns),
                 'matrix': sparse.csr_matrix((0, 0), dtype=np.int64),
@@ -1649,6 +1700,7 @@ def _stream_assignment_product(
     matrix, barcodes, guides = build_guide_umi_matrix(deduped_df)
     return {
         'mode': source_mode,
+        'completion': completion,
         'deduped': deduped_df,
         'assignment': assignment_df,
         'matrix': matrix,
@@ -1705,9 +1757,13 @@ def _write_assignment_product(product, output_dir, gex_namespace):
         index=False,
         compression='gzip',
     )
-    recovery_cols = [c for c in product['deduped'] if c.startswith('recovery_umi_')]
+    correction_counts = product['deduped']
+    if 'structure_correction' in correction_counts:
+        correction_counts = pd.DataFrame([json.loads(value) for value in correction_counts.structure_correction])
+        correction_counts['bc_wells'] = product['deduped']['bc_wells'].to_numpy()
+    recovery_cols = [c for c in correction_counts if c.startswith('recovery_umi_')]
     if recovery_cols:
-        product['deduped'].groupby('bc_wells')[recovery_cols].sum().to_csv(
+        correction_counts.groupby('bc_wells')[recovery_cols].sum().to_csv(
             os.path.join(assign_dir, f'grna_recovery_cells_{mode}.csv.gz'), compression='gzip')
     elif Path(assign_dir, f'grna_recovery_cells_{mode}.csv.gz').exists():
         # Rebuilding counts without recovery must not retain an older summary.
@@ -1790,6 +1846,16 @@ def _write_assignment_product(product, output_dir, gex_namespace):
     if mode != 'dedicated':
         with open(summary_path, 'w') as handle:
             yaml.safe_dump(summary, handle, sort_keys=False)
+    if product.get('completion') is not None:
+        try:
+            from scripts.relaxed_structure import write_assignment_completion
+        except ModuleNotFoundError:
+            from relaxed_structure import write_assignment_completion
+        artifacts = [Path(assign_dir)/names[k] for k in ('assignment','counts','matrix','barcodes','guides')]
+        cell_summary = Path(assign_dir)/f'grna_recovery_cells_{mode}.csv.gz'
+        if cell_summary.exists():
+            artifacts.append(cell_summary)
+        write_assignment_completion(assign_dir, mode, product['completion'], artifacts)
     print(f"  Saved {mode} assignment products under: {assign_dir}")
     return assign_dir
 

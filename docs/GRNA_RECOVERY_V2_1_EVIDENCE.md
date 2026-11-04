@@ -1,320 +1,123 @@
-# v2.1 opt-in guide recovery
+# v2.1 optional gRNA recovery
 
-**4 November 2026.** The implementation and four-library benchmarks recover more guide evidence. Downstream expression signatures support biological consistency in a subset of recovered cells, while the primary cis-knockdown test and shortened-only efficacy remain inconclusive. Recovery therefore stays **opt-in**; existing defaults and pilot expression counts are unchanged. This guide covers activation, parameter changes, rationale and measured recovery. The [original plan](GRNA_RECOVERY_V2_1_PLAN.md) preserves the design criteria; the [illustrated benchmark](../analysis/output/invalid_construct_kd_union_20261023/fiveprime_20261104/v2_1/report.html) provides the detailed figures.
+v2.1 can recover guide evidence lost to a short spacer or an uncertain TSO boundary, and can include guide reads captured from GEX. Configure these options in the **same YAML used for the rest of the run**. They remain off by default: the four-library pilot gained guide molecules and cells, but some singlets became multiplets and biological support was mixed.
 
-## Choosing a mode for a new run
+## Configure once
 
-| Choice | When it is useful | Benefit | Tradeoff |
-|---|---|---|---|
-| **Standard (`off`)** | Strict comparability with an existing analysis, or no convincing structural evidence among rejected reads | Established behavior; no additional guide calls | Discards some informative reads and cells |
-| **Audit** | First evaluation of a new library, construct or read length | Measures eligible recovery without changing assignments | Extra processing; no immediate cell gain; audit alone does not validate a setting |
-| **Automatic recovery** | The audit shows unique spacer/scaffold evidence and held-out identity checks pass | More guide molecules, cells and observed partners; settings adapt to the reference and pilot | Some singlets become multiplets; real-read assignment error and biological benefit need review |
-| **Constrained automatic recovery** | Prefer a smaller change while retaining validation | Set `spacer.min_retained: 18` or lower `max_5prime_loss`; auto searches within that limit | May lose useful evidence; the 18-nt floor lost only seven newly assigned cells in this pilot |
-| **Manual recovery** | A fixed policy has already been evaluated for the intended design | Explicit, reproducible limits | Bypasses automatic validation; unsupported choices need their own benchmark |
-
-Start with an audit for an unfamiliar library. Inspect the fraction recovered,
-ambiguous candidates, length uncertainty and iBAR disagreement. If useful
-recovery is present, run automatic preflight and review the saved policy before
-using recovered cells. An inconclusive pilot is a reason to keep standard calls,
-not to lower validation criteria just to enable recovery.
-
-Before adopting the relaxed result, compare strict and recovered assignments,
-net singlet gain, new multiplets and support from independent molecules. Check
-cis-KD where expression permits; otherwise use independently validated trans
-signatures with matched strict/control cells. Keep strict and recovered cells
-identifiable so conclusions can be checked with and without recovery. A matching
-trans signature supports biological consistency but is not a measure of guide
-assignment purity or proof that a shortened RNA was active.
-
-Use `ibar_corroboration: report` when spacer–iBAR coupling is uncertain or when
-comparing libraries without iBARs. Choose `require` only when that coupling is
-trusted and losing discordant reads is acceptable. Neither choice lets an iBAR
-resolve an ambiguous spacer. Intentionally absent iBARs remain supported;
-missing sequence from a truncated read is not treated as absence by design.
-
-## A. Rationale
-
-Two problems can discard useful evidence: a spacer can be shorter than its design, or the parser can choose the wrong TSO endpoint despite recognizable guide structure. v2.0's design-aware parser improved construct handling but still selected that endpoint first. The v2.1 change evaluates TSO, spacer and scaffold together, retaining the existing three-edit TSO limit.
-
-**5′ damage is plausible, not established.** U6-driven guides lack the conventional mRNA cap, but RNA structure, end chemistry and Cas binding also affect stability. Terminal modifications can improve guide performance, whereas mature sgRNAs resisted a 5′ exonuclease in a plant study. Neither finding proves when the pilot's shortening occurred. The relevant comparison is with capped mRNA templates; cDNA is DNA. [Hendel et al., 2015](https://pmc.ncbi.nlm.nih.gov/articles/PMC4729442/), [Cody and Scholthof, 2020](https://pmc.ncbi.nlm.nih.gov/articles/PMC7536693/).
-
-**Short spacers can retain biochemical activity.** Li et al. measured Cas9 cleavage with 16-nt guides **in vitro**. Cleavage varied by more than 50-fold with the DNA sequence beyond the RNA–DNA hybrid. This supports investigating shorter guides, but does not demonstrate cellular CRISPRi knockdown or justify a universal 16-nt mapping cutoff. The study itself distinguishes its in-vitro findings from previous cellular limitations. [Li et al., 2023, *Biochemistry* 62:2541–2548](https://doi.org/10.1021/acs.biochem.3c00250), [open full text](https://pmc.ncbi.nlm.nih.gov/articles/PMC10578059/).
-
-**The TSO is introduced during reverse transcription.** Template switching and non-templated nucleotide addition can create junction variation; preparation damage and PCR/sequencing errors are other possibilities. Repeated G bases can make several boundaries plausible. The parser should retain that uncertainty rather than infer a unique amount of damage. [Wulf et al., 2019](https://pubmed.ncbi.nlm.nih.gov/31640989/), [Zajac et al., 2013](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0085270).
-
-In the earlier pilot audit, normal and short reads co-occurred in **92.2%** of well-supported cell/position/iBAR groups containing short reads; their median short fraction was **16.0%**. Only **4.3%** of short-containing UMI families also contained normal reads. This is consistent with a shared guide origin, but cannot distinguish intracellular shortening from preparation artifacts. Recovering identity does not establish that a shortened RNA caused the observed phenotype.
-
-## B. Activation and changes from standard mode
-
-**A code upgrade is required; editing a v2.0 YAML alone is insufficient.** The
-new mapper evaluates TSO endpoints, spacer identity and scaffold together.
-Step 2 can collect the pilot sample, Step 3 selects and applies the policy,
-Step 4 counts rescued and standard reads together, and Step 5 records the
-provenance. Step 1c reuses the dedicated-library policy for GEX-derived evidence. After upgrading
-these scripts, switching modes and tuning limits requires only configuration.
-
-Omitting `grna_recovery`, or setting `grna_recovery.mode: off`, preserves standard
-v2.0 behavior. Recovery is an additional pass over failed/unmatched reads;
-existing successful calls and cell-assignment thresholds are preserved.
-Do not widen `grna_structure.grna_lengths` or the general guide edit distance
-to imitate this feature: those settings cannot distinguish a unique 5′ suffix
-from other edits or competing guide identities.
-
-The [full opt-in overlay](../examples/grna_recovery_v2_1_enabled.yaml) enables
-both relaxed matching and incorporation of GEX-derived guide evidence. The
-[audit overlay](../examples/grna_recovery_v2_1.yaml) changes only the matching
-audit. Merge individual keys into the complete run configuration, preserving
-its existing paths, construct and filter settings.
-
-### Parameters
-
-Keys below are relative to `grna_recovery` unless explicitly qualified.
-Standard-mode values describe the four-library baseline; other designs can
-have different existing settings.
-
-| Parameter or rule | Standard mode | Opt-in recovery preset |
-|---|---|---|
-| `mode` | `off`, including when omitted | `audit` to inspect; `auto` to enable after validation; `manual` for a fixed policy |
-| `tso.endpoint_policy` | Choose TSO endpoint before spacer extraction | `joint`: consider all compatible endpoints with spacer and scaffold; `original` is an ablation |
-| `tso.max_edit_distance` | `grna_structure.tso_max_edit_dist: 3` | `3`, unchanged; full TSO only (`partial_tso: false`) |
-| `tso.search_end` | First 50 R1 bases | `50`, unchanged |
-| `spacer.max_5prime_loss` | Designed/configured lengths (20/21 nt in this pilot); no explicit suffix rescue | Up to `3` bases from each guide's own 5′ end; auto tests limits 0–3 |
-| `spacer.min_retained` | No separate rescue floor | `auto` compares 18 and 17 nt; an integer fixes the floor |
-| `spacer.retained_edit_distance` | General matching uses `grna_matching.max_lev_dist` (3 in this pilot) | `0`: exact retained sequence; unrelated general matching settings are unchanged |
-| `spacer.min_quality` | No added recovery-specific quality filter | Every retained spacer base ≥Q30 |
-| Scaffold support | Existing configured anchors | Both stem and downstream anchor required, using the existing combined mismatch limit (2 in this pilot) |
-| Identity ambiguity | Existing mapper | Reject competing identities across the full reference, including plausible suffix competitors outside the accepted loss limit |
-| `ibar_corroboration` | Existing guide/iBAR rules | `report` annotates agreement without requiring it for spacer recovery; optional `require` rejects disagreement/unknown iBAR |
-| `gex_decontamination.step1c.enabled` | `false` | `true` in the full opt-in preset: identify guides in GEX filter-positive evidence |
-| `gex_decontamination.combine_with_grna_arm.enabled` | `false` | `true` in the full opt-in preset: include accepted GEX guide evidence in final calls |
-| UMI and cell thresholds | Existing `guide_assignment` settings | Unchanged; rescued reads join the same UMI clustering before assignment |
-
-For a 20-nt design, a three-base loss permits 17 nt; a 21-nt design still needs
-18 nt. Intact reference guides are not discarded merely because they are
-shorter than the rescue floor. One read with both intact and shortened
-interpretations is counted once and labeled length-uncertain.
-
-The tunable automatic controls are `pilot.sample_reads` (up to 100,000),
-`seed`, `min_validation_families`, `min_accuracy` and `near_optimal_fraction`.
-The sample size, seed and validation criteria below are the benchmarked values.
-Auto selects the loss limit and retention floor; it does **not** learn the TSO
-edit budget, base-quality threshold or iBAR policy. Reducing quality/validation
-requirements or using a floor below 17 nt is outside this benchmark.
-
-### Include guide reads from GEX
-
-**GEX decontamination and GEX guide assignment are separate.** Standard future
-runs remove recognized guide contaminants from GEX, but do not add them to
-guide calls. The full v2.1 opt-in enables both identity recovery and source
-merging:
+A **v2.1 code upgrade is required**. Changing a v2.0 YAML alone cannot add the joint TSO/spacer/scaffold matching or restart checks. After upgrading, edit the annotated entries already present in the standard config templates; no overlay file or separate audit run is required. If you used an earlier v2.1 draft config, replace its `grna_recovery` section with these entries; do not keep both.
 
 ```yaml
+# Edit these entries inside the existing sections; retain your construct settings.
+grna_structure:
+  relaxed_structure: auto       # false = standard; auto = discover; true = use limits below
+  relaxed_max_5prime_loss: 3     # at most 3 nt shorter than each designed spacer
+  relaxed_min_retained: 17      # retained-length floor; auto may choose a higher floor
+  relaxed_max_tso_shift: 3      # endpoint may move at most 3 nt from the standard TSO call
+  relaxed_min_quality: 30       # every retained spacer base must meet this Phred score
+  relaxed_require_ibar: false   # report iBAR agreement; true requires it where iBAR exists
+
 gex_decontamination:
-  enabled: true
+  # Keep the existing GEX filtering settings, including the top-level enabled flag.
   step1c:
-    enabled: true
+    enabled: true               # identify guides in captured GEX evidence
   combine_with_grna_arm:
-    enabled: true
+    enabled: true               # include those reads in final guide calls
     combine_before_umi_collapse: true
     retain_source_provenance: true
 ```
 
-Step 1c consumes the corrected-barcode evidence collected during full GEX
-preprocessing and reuses the dedicated library's frozen recovery policy.
-The preset retains the conservative GEX acceptance rules: guide/iBAR edit
-distance at most one, compatible resolved iBAR in dual-guide mode, and no
-decoupled calls. Design-aware layouts allow genuine iBAR absence. Short reads
-that cannot establish identity remain unresolved.
+Use `auto` when the abnormal structures are unknown. It samples up to 100,000 decoded reads **per sublibrary**, reuses the existing construct/iBAR orientation diagnostics, and evaluates combinations of spacer loss and TSO endpoint shift. Multiple supported patterns can contribute; it does not assume that every abnormal read has one fixed shift or loss. It checks guide identity against the complete reference, including competing shortened spacers. Expression outcomes never select settings.
 
-Step 4 combines accepted dedicated and GEX reads before UMI correction. A shared
-molecule is counted once, and source contributions remain available. Step 5
-uses the combined calls while retaining dedicated and GEX matrices for comparison.
-The benefit is additional evidence from a second library; the tradeoffs are
-extra processing and possible new multiplets, and many GEX molecules may already
-be represented in the dedicated library.
+The pilot chooses **one shared parameter set for every sublibrary and for both dedicated and GEX guide reads**. Each sublibrary must pass held-out checks; within that shared set, auto chooses the least permissive setting within 1% of the best pooled recovery. Validated iBAR orientation corrections are shared too. Conflicting strand evidence stops the run; insufficient recovery-validation evidence keeps standard calls for all sublibraries. The decision, pattern counts and validation results are saved in `grna_matches/relaxed_structure.json`.
 
-These switches do not broaden the GEX contaminant filter: only its captured
-candidates enter Step 1c. Matching a larger fraction of that evidence is different
-from scanning all GEX reads for additional candidates. For an existing run,
-reuse compatible Step 1a corrected-barcode evidence. If it is unavailable,
-the historical run needs a separate evidence-extraction/preprocessing pass;
-retain the original expression matrix. See [existing-run support](GEX_DECONTAMINATION_V1_4.md#existing-split-pipe-runs).
+`true` uses the stated limits directly, for a setting already evaluated for the intended reference. It still requires unambiguous guide identity but skips automatic parameter selection. `false` retains standard matching. The other `relaxed_*` entries are limits for auto and fixed values for `true`; they do nothing when the option is false. For example, a 20-nt design may retain 17 nt after three-base loss, whereas a 21-nt design needs at least 18 nt. The benchmark does not validate a universal 16-nt cutoff.
 
-`mode: audit` only audits the relaxed threshold. It does not disable separately
-enabled GEX source merging. To audit without adding a new evidence source,
-use the audit overlay on the standard configuration; apply the full opt-in
-overlay when ready to change final guide calls. To return fully to standard
-calls, disable recovery and both GEX identity/merge switches.
+| What changes | Standard workflow | With relaxed structure |
+|---|---|---|
+| Spacer length | Designed/configured lengths | Also a unique 5′-shortened suffix within the selected limits |
+| TSO boundary | TSO endpoint chosen before spacer matching | Compatible endpoints evaluated jointly with spacer and scaffold |
+| Retained spacer | Existing general error correction | Additional calls require an **exact** retained sequence at the configured quality floor |
+| Scaffold | Existing construct parser | Both stem and downstream anchor must be observed |
+| iBAR | Existing construct assignment rules | Spacer recovery reports agreement independently; optional corroboration cannot resolve an ambiguous spacer |
+| Molecule/cell thresholds | Existing `guide_assignment` values | Unchanged |
 
-### Configure and inspect
+Keep `grna_lengths`, the general guide edit distance and the existing TSO edit budget unchanged. The pilot used a three-edit TSO budget; relaxation changes endpoint selection, not that budget. Partial TSO rescue and scaffold indels are unsupported. Full and short interpretations of the same read can coexist and are recorded as uncertain rather than assigned a definite damage length.
 
-After installing v2.1, merge the [example overlay](../examples/grna_recovery_v2_1.yaml) into a complete pipeline configuration. It starts in `audit` mode, which reports candidates without changing assignments. To opt in to assignment-changing recovery, use `mode: auto` as below:
+No-iBAR and asymmetric-iBAR designs use their existing [design-aware reference settings](ASYMMETRIC_GUIDE_DESIGNS.md). Intentional absence is supported, including when corroboration is required. Failure to sequence an expected iBAR is not absence by design. With corroboration off, a unique spacer can be retained despite iBAR disagreement, but it cannot force an unsupported construct identity. Step 1c retains its existing, stricter GEX acceptance rules, so some such reads still do not enter combined calls.
 
-```yaml
-grna_recovery:
-  mode: auto                    # off, audit, auto, manual
-  tso:
-    endpoint_policy: joint      # original is an ablation
-    max_edit_distance: 3
-    partial_tso: false
-  spacer:
-    max_5prime_loss: 3           # relative to each guide's designed length
-    min_retained: auto          # compare 18 and 17 bases
-    min_quality: 30
-    retained_edit_distance: 0
-  ibar_corroboration: report     # require is an optional stricter subset
-  pilot:
-    sample_reads: 100000
-    seed: 21
-    split_by: cell_umi
-    min_validation_families: 1000
-    min_accuracy: 0.995
-    near_optimal_fraction: 0.99
-  resolved_contract: null
-```
+The two GEX switches are independent of structural relaxation. **Decontamination alone does not add reads to guide calls.** Step 1c identifies guides in the evidence already captured by the GEX filter; `combine_with_grna_arm.enabled` adds accepted evidence. These switches do not broaden the contaminant filter or scan all GEX reads anew.
 
-`auto` uses a deterministic sample from the complete barcode-decoded library.
-New Step 2 runs collect it during extraction; existing inputs require a streaming
-pass. Each cell/UMI family belongs to discovery or validation, never both.
-Settings are selected without expression data. The least permissive setting
-within 99% of the best passing recovery is selected. Validation requires at
-least 1,000 accepted families per challenged loss class and layout, a one-sided
-95% accuracy lower bound of 99.5%, and a shuffled-spacer negative-control upper
-bound no greater than 0.5%. These are synthetic challenge criteria, not a
-measured false-assignment rate for experimental reads.
+## Run or restart
 
-Run preflight separately to inspect its decision:
+For a new run, follow the [quick start](QUICKSTART.md), make the choices above while configuring the run, and use the usual launcher:
 
 ```bash
-python scripts/03_match_grna_ibar.py --config config.yaml --library C1 --preflight-only
+bash submit/submit_pipeline.sh --config /absolute/path/to/config.yaml
 ```
 
-The policy and validation evidence are saved as
-`grna_matches/C1_recovery.json`. To reuse that exact choice, set
-`resolved_contract` to its path. Reference or setting mismatches are rejected.
-An inconclusive automatic pilot retains baseline calls. Raw FASTQ preflight,
-without validated cell barcodes and UMIs, cannot enable automatic recovery.
+The launcher runs one shared pilot after Step 2, then maps all sublibraries with its saved policy. Step 1c uses that same policy. Step 4 combines read-level evidence from dedicated and GEX libraries **before UMI filtering and correction**, then assigns cells. Step 5 rebuilds AnnData from the existing GEX products and new guide results.
 
-`audit` reports eligible candidates in the failed-read companion file without
-adding them to counts. It uses the specified retention floor, or 18 bases when
-the floor is `auto`; use `auto --preflight-only` to inspect automatic selection. `manual` applies the specified loss limit and retention
-floor but still rejects ambiguous identities. Its settings bypass automatic validation. `off` preserves the original output schema and matching behavior.
+For a completed run, edit the same config and rerun the guide stages:
 
-The spacer determines guide identity. `ibar_corroboration: report` retains
-unambiguous spacer evidence and records exact iBAR agreement, disagreement or
-absence by design. `require` accepts a rescue only with agreement or genuine
-absence by design. Neither mode corrects a spacer using iBAR identity. Unresolved
-or foreign iBARs cannot force a construct assignment. Shared guide sequences
-may remain ambiguous even when they identify a target gene.
+```bash
+bash submit/submit_pipeline.sh --config /absolute/path/to/config.yaml --step 3,4,5
+```
 
-Both scaffold anchors must be observed. No-iBAR and asymmetric-iBAR constructs
-use the existing [design-aware configuration](ASYMMETRIC_GUIDE_DESIGNS.md)
-(`guide_design.enabled: true`) and their reference layouts. A truncated read is not evidence of intentional
-iBAR absence. The established single-guide short-read route remains available
-when the new recovery lacks a downstream anchor.
+This also reruns Step 1c and its aggregation when enabled. It reuses Step 2 barcode files (include Step 2 in the restart if they are no longer available) and existing GEX expression products; it does not schedule GEX alignment or expression counting. An older Step 2 file without a cached pilot sample needs one streaming scan. On another scheduler, run the shared pilot once with `python scripts/03_match_grna_ibar.py --config config.yaml --preflight-only` before launching per-library matching. A per-library pilot alone cannot establish the shared policy.
 
-Step 4 combines baseline and rescue reads before UMI filtering and correction.
-Recovery annotations describe those same molecule clusters. `baseline_only`
-means counted by the previous mapper; it does not establish an intact physical
-spacer. `shortened_only` and `length_uncertain` describe the candidate boundaries.
-Cell summaries are written beside the assignment outputs and copied into
-AnnData, with frozen policies in `uns['grna_recovery_policies']`.
+**Check these restart conditions:**
 
-Step 1c reuses the dedicated library's frozen policy. Run its preflight first.
-This changes guide evidence recovery, not which GEX reads are removed or the
-pilot expression counts. Q1 amplicon primers are not TSOs; its existing library-QC
-parser is a separate assay and does not automatically inherit this RT-junction
-policy.
+- Captured, corrected-barcode GEX evidence must exist to use Step 1c. Otherwise use the documented [existing-run evidence extraction](GEX_DECONTAMINATION_V1_4.md#existing-split-pipe-runs); enabling a switch does not recreate missing reads. Preserve the original expression matrix.
+- Step 1c hashes the full config. Rerun it after changing the YAML; prior Step 1c matches/manifests are archived before rebuilding. Do not edit hashes by hand. GEX completion validation permits proven changes only to the guide-only `step1c.enabled` and `combine_with_grna_arm.enabled` switches; GEX filter, alignment, counting, reference and sample changes remain incompatible.
+- Step 3 binds the shared policy to the reference, settings, sublibrary list and decoded inputs. Step 4 rejects stale or incomplete relaxed matches. Step 5 checks that the counted products still match their inputs, settings and shared policy. Rerun all sublibraries together after changing settings.
+- **Step 5 replaces `combined_adata.h5ad`; downstream annotations are not merged into the new file.** The launcher and Step 5 warn about this. Step 5 first writes the rebuilt file successfully, then preserves the complete previous AnnData and its annotation inventory under `grna_restarts/`. Reapply downstream analysis to the new result as appropriate.
 
-### Apply to an existing run
+Relaxed reads retain the observed `grna_seq` and record the designed sequence in `grna_seq_corrected`. Existing `grna_dist` records the sequence difference, including missing 5′ bases, and `match_type` identifies `relaxed_structure`. One `structure_correction` field records plausible losses, TSO endpoints/shifts, iBAR agreement and the shared policy. This distinguishes structural recovery from ordinary spacer-error correction without adding a column for every diagnostic.
 
-Use a separate output namespace for the relaxed call, preserving the original
-GEX expression products and strict assignments for comparison. Reuse compatible
-Step 2 barcode files; an existing file only needs a streaming pilot pass, not
-re-extraction. Run Step 3 preflight, then matching, Step 4 assignment and Step 5
-integration with the same configuration. If Step 1c guide recovery is used,
-run it after the dedicated policy is frozen and before the combined Step 4.
-The main launcher orders these jobs automatically when recovery is enabled.
-A Step-1-only submission requires an already frozen policy.
-Neither a GEX realignment nor retrospective GEX decontamination is required
-solely to change this guide-mapping policy. Recovery requires `edlib` in the
-production environment; keep other dependencies from the existing installation.
+Step 4 summarizes standard-only, relaxed-only and mixed evidence on the **same UMI clusters used for counting**, in a compact count-table field and cell-summary sidecars. Step 5 stores the shared policy and source-specific molecule summaries in `uns['grna_structure']`, without adding a series of recovery columns to `obs`. These records support comparisons excluding relaxed calls or requiring additional independent molecules. Standard mapper support does not itself prove an intact physical RNA.
 
-## C. Expected recovery: technical benchmark
+## Why this may help
 
-### Inputs and automatic choice
+A short spacer can arise before or during library preparation. U6-driven guide RNAs lack the conventional mRNA cap, making 5′ damage a plausible explanation, but RNA structure and Cas binding also affect stability. The relevant comparison is capped RNA, not cDNA. The pilot does not establish when shortening occurred. [Hendel et al., 2015](https://pmc.ncbi.nlm.nih.gov/articles/PMC4729442/), [Cody and Scholthof, 2020](https://pmc.ncbi.nlm.nih.gov/articles/PMC7536693/).
 
-These are measured gains for this pilot, not guaranteed gains for another reference, construct or read length.
+The TSO is introduced during reverse transcription. Junction variation, preparation damage, PCR errors and sequencing errors can complicate its boundary. Repeated G bases can support several endpoints. v2.0 improved construct handling but still chose the TSO endpoint first; this ambiguity remained recoverable. [Wulf et al., 2019](https://pubmed.ncbi.nlm.nih.gov/31640989/), [Zajac et al., 2013](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0085270).
 
-The comparison scanned all **84,099,473** barcode-decoded dedicated-library reads from C1, C2, T1 and T2. Cell comparisons use the same **37,086** GEX-retained cells, reference and assignment thresholds throughout. The baseline is the effective v2.0 code/configuration snapshot saved before implementation.
+Li et al. observed Cas9 cleavage with **16-nt guides in vitro**, with more than 50-fold sequence-dependent variation. This supports investigating shorter guides, but does not establish cellular CRISPRi knockdown or a mapping threshold. [Li et al., 2023, *Biochemistry*](https://doi.org/10.1021/acs.biochem.3c00250), [full text](https://pmc.ncbi.nlm.nih.gov/articles/PMC10578059/).
 
-Each library used a uniform 100,000-read pilot, split by cell/UMI family. Settings were selected without expression outcomes. All four selected joint endpoints, up to **three bases lost relative to each guide's own design**, and at least **17 retained bases**. Retained spacer sequence must match exactly at Q30 or better; competing reference identities are rejected. Full-length and short interpretations of one identity may coexist and are labeled uncertain. iBAR agreement is reported separately and cannot determine an ambiguous spacer identity.
+Normal and short reads co-occurred in **92.2%** of well-supported cell/position/iBAR groups containing short reads; the median short fraction was **16.0%**. Only **4.3%** of short-containing UMI families also had normal reads. This is consistent with a common guide origin, but does not distinguish intracellular shortening from preparation artifacts or prove that a shortened RNA caused the phenotype.
 
-### Measured recovery
+## Expected gain and tradeoffs: four-library pilot
 
-| Setting | Added reads, all cells | Newly assigned cells | Net singlet gain | Recovered missing partners | Additional cell–pair calls |
-|---|---:|---:|---:|---:|---:|
-| Endpoint only | 4,001,925 | 339 | 87 | 434 | 673 |
-| Spacer only | 2,714,002 | 287 | 65 | 534 | 585 |
-| Combined, ≥18 nt | 4,772,949 | 430 | 124 | 679 | 847 |
-| Combined, ≥17 nt / automatic | **4,931,644** | **437** | **127** | **694** | **862** |
-| Require iBAR agreement | 4,710,521 | 437 | 127 | 694 | 862 |
+These are measured results for C1, C2, T1 and T2, not a promise for every design. The updated benchmark scanned **84,099,473** decoded dedicated-library reads, holding the **37,086** GEX-retained cells and assignment thresholds fixed. Auto selected one policy across all four sublibraries: up to **three bases of 5′ loss**, at least **17 retained bases**, and a TSO endpoint shift of at most **three bases**. iBAR corroboration was reported but not required. The shared pilot took about 24 minutes on one CPU; full matching and counting are additional work.
 
-Automatic recovery adds **5.86 percentage points** of all input reads. Among retained cells, matched reads rise from 54,979,254 to 59,475,425 and jointly deduplicated guide molecules from 2,146,814 to 2,367,497. Assigned cells rise from 31,246 to 31,683. No baseline cell–pair call is lost.
+**Technical recovery**
 
-The gain is smaller for analyses requiring singlets: 433 newly assigned singlets are offset by **306 existing singlets becoming multiplets**, leaving 127 net additional singlets. Additional pairs could reflect real multiple constructs or contamination; the benchmark does not establish their origin. Requiring at least two or three incremental rescue molecules reduces the newly assigned-cell count from 437 to **264** or **130**, respectively. These are sensitivity counts, not a newly validated assignment threshold.
+| Metric | Standard | Relaxed benchmark | Change |
+|---|---:|---:|---:|
+| Matched reads, all decoded cells | 60,360,104 | 65,275,272 | **+8.14%** |
+| Matched reads, retained cells | 54,979,254 | 59,459,931 | +8.15% |
+| Guide UMIs, retained cells | 2,146,814 | 2,366,989 | **+10.26%** |
+| Cells with guide assignments | 31,246 | 31,683 | **+437 / +1.40%** |
+| Cell–pair assignments | 38,479 | 39,339 | **+860 / +2.23%** |
+| Complete pairs | 25,922 | 26,952 | +1,030 |
+| Singlets | 25,478 | 25,605 | **+127 / +0.50%** |
 
-Endpoint recovery supplies most of the gain. The 18-nt setting retains nearly all cell recovery; allowing 17 nt adds seven new cells and 15 missing partners. Requiring exact iBAR agreement reduces read evidence but leaves resolved pair calls unchanged in this pilot, whose construct resolution already requires compatible iBAR evidence. This does not assume spacer–iBAR linkage is reliable in every library.
+The additional 4,915,168 matched reads equal **5.84 percentage points of input reads**. Recovery found 694 missing partners and lost no baseline cell–pair calls. However, 433 newly assigned singlets were offset by **306 previous singlets becoming multiplets**. New pairs could reflect genuine multiple constructs or contamination; the benchmark cannot distinguish them. Requiring two or three incremental rescue molecules reduced newly assigned cells to 264 or 130.
 
-### Accuracy, compatibility and cost
+Earlier ablations, before adding the explicit three-base endpoint-shift cap, help explain the gain: endpoint-only recovery added 4,001,925 reads and 339 assigned cells; spacer-only recovery added 2,714,002 reads and 287 cells. Their gains overlap. A combined 18-nt floor retained 430 of the 437 new cells. Requiring exact iBAR agreement reduced added reads to 4,710,521 but left resolved pair calls unchanged in this pilot. Optional corroboration therefore provides a useful sensitivity check without assuming linkage is reliable in every library.
 
-- **Baseline parity:** all 54,979,254 retained-cell match rows and 434,797 molecule-count groups agree with production. Current-code recounts reproduce all four automatic-arm count tables. Old and rescued reads enter the same UMI correction; shared-source reads are counted once.
-- **Automatic challenges:** every enabled loss class/layout passes the held-out criteria. The smallest one-sided 95% accuracy lower bound is **99.9378%**. Shuffled-spacer negatives yield zero accepted matches, with upper bounds of 0.0147–0.0161%. These synthetic bounds are not estimates of experimental false assignment.
-- **Reference challenges:** the pilot and dense 10,502-spacer Gavin reference produce no wrong identities in the tested truncation/TSO-error challenges. Ambiguous suffixes, altered retained spacers, cross-scaffold constructs and missing downstream anchors are rejected. No-iBAR and asymmetric layouts pass fixtures; their biological performance has not been established here.
-- **Regression checks:** the benchmark passed 66 recovery/design, GEX-guide processing and preflight tests. Release verification passes 96 pipeline checks and seven biological-method checks, including the launcher, opt-in presets and audit count preservation. AnnData metadata round-trips without changing expression. `off` matches the frozen baseline on 400,000 sampled reads.
-- **Cost:** the shared six-arm scans take 7.0–15.6 minutes per library using four slots. Complete benchmark tasks take 27.5–52.4 minutes; scheduler maximum virtual memory is 3.57–3.68 GiB. This includes repeated counting and parity checks and is not an isolated estimate of production overhead.
+Held-out synthetic identity tests had a minimum one-sided accuracy bound of **99.9378%**. Shuffled-spacer controls produced no accepted matches. These are not experimental false-assignment estimates. Tests also covered a dense 10,502-spacer reference and no/asymmetric-iBAR layouts; those layouts do not yet have biological validation here.
 
-A separate check applies the frozen policies to **84,415 previously archived GEX guide reads**, recovering another **6,120** matches, of which 5,432 belong to retained cells. This selected archive is not the full GEX denominator, and these reads are not added to the dedicated-library gains above. It supplies additional normal-guide exclusions for the biological audit. The 6,120 are newly matched archived reads, before the full preset’s GEX strict filter and joint source counting; they are not a measured incremental cell or UMI gain from the combined preset. The cell and biological benchmarks above/below use dedicated-library recovery. Additional biological validation of the combined calls remains separate. The original 150-base paired-end GEX matrix is preserved; retrospective decontamination is unnecessary for this comparison.
+A separate selected archive of **84,415 GEX guide reads** yielded **6,120 additional matches**, before Step 1c's strict filter and joint source counting. It is not a full GEX denominator. **An additional cell/UMI gain from enabling GEX merging has not been established**, and must not be added to the table above. The pilot's 150-nt paired-end GEX matrix was preserved; retrospective decontamination was unnecessary.
 
-Archived pilot outputs (paths below are relative to the project workspace): [technical summary](../output/grna_spacer_scan_20261023/fiveprime_20261104/v2_1/technical_combined.csv), [library/read results](../output/grna_spacer_scan_20261023/fiveprime_20261104/v2_1/read_recovery.csv), [cell transitions](../output/grna_spacer_scan_20261023/fiveprime_20261104/v2_1/cell_transitions.csv), [held-out tests](../output/grna_spacer_scan_20261023/fiveprime_20261104/v2_1/automatic_validation.csv), [run manifest](../output/grna_spacer_scan_20261023/fiveprime_20261104/v2_1/manifest.json).
+**Biological validation**
 
-## D. Expected recovery: biological validation
+Direct target expression was too sparse for a firm primary conclusion. At three incremental rescue molecules, newly assigned CCM2 cells (n=13) had estimated KD of 9.9%, and TLNRD1 cells (n=12) −23.0%; both intervals were wide and adjusted P=0.878. The shortened-only cohort contained just **two cell–target observations**. Any cell with a detected normal guide targeting the same gene was excluded from that cohort, across guides, positions, iBARs and evidence sources.
 
-The primary test requires **three incremental rescue UMI clusters**, an observed target guide and a compatible singlet assignment. Models compare with 1,518 non-targeting-control cells and normal-guide cells, adjusting for expression depth, library, guide and partner. Four sublibraries are technical partitions, not independent biological replicates.
+Trans-expression signatures provided partial support. Signatures were trained on strict cells and validated in separate strict cells, excluding recovered cells and all directly perturbed genes. Seven of 12 tested targets validated. Newly recovered CCM2 cells agreed with the strict signature at one- and two-molecule thresholds; TLNRD1 agreed at one molecule. Three-molecule target-level tests remained inconclusive. An exploratory pool of 29 CCM2/MEF2C/TLNRD1 cells had a **0.50 control-SD** signature effect (95% CI 0.13–0.87; adjusted P=0.012), compared with **1.29 SD** in matched strict cells: aligned direction, weaker response.
 
-For shortened-only efficacy, the exclusion is gene-wide: **any detected normal guide targeting that gene**, across positions, guides, iBARs and dedicated/GEX sources, excludes the cell–target observation. Plausible intact boundaries, mixed molecules and uncertain lengths also exclude it. Normal-guide comparisons are controls, not evidence included in the shortened-only cohort.
+Recovery is therefore useful for retaining evidence and some biologically consistent cells, with the costs of extra processing, more multiplet calls and uncertain benefit for weakly supported assignments. These results do not prove shortened-only guide activity or establish assignment purity. Keep recovery identifiable in analyses; treat target-specific and shortened-only claims according to their available support.
 
-| Primary newly assigned-cell contrast | Cells | Estimated KD | 95% interval | Adjusted P |
-|---|---:|---:|---:|---:|
-| CCM2 | 13 | 9.9% | −242.5% to 76.3% | 0.878 |
-| TLNRD1 | 12 | −23.0% | −224.8% to 53.4% | 0.878 |
+Implementation checks reproduced the standard calls and counts in all four sublibraries. Recounting every retained-cell read with the compact production metadata reproduced the benchmark counts exactly. The pipeline suite passed 151 tests (three environment-dependent skips); all seven biological-method tests passed.
 
-Neither contrast establishes on-target KD. Missing-partner groups have only 1–8 eligible cells per target. The shortened-only cohort has **two cell–target observations** at this threshold, one TLNRD1 and one ZEB2, so no shortened-only effect can be estimated. No strictly intact-endpoint recovery survives the three-molecule threshold; four cell–target observations survive at one molecule. Optimistic count-based power for a 20% effect is below 10% in the primary recovery cohorts. Shuffled-label comparisons are also inconclusive.
-
-One- and two-molecule sensitivity analyses are reported separately. At one molecule, mixed/uncertain-length recovery shows exploratory KD for JUN (27 cells; 79.5%, 95% CI 37.6–93.2%), LAMB2 (24; 52.9%, 15.9–73.6%) and MEF2C (22; 79.9%, 32.8–94.0%). Each has adjusted P = 0.029 within this sensitivity family. These findings do not validate shortened-only activity or satisfy the primary release gate. Full estimates, matched normal-guide effects, cohort sizes, exclusions and model failures are retained, including negative results.
-
-Data: [illustrated report](../analysis/output/invalid_construct_kd_union_20261023/fiveprime_20261104/v2_1/report.html), [all KD estimates](../analysis/output/invalid_construct_kd_union_20261023/fiveprime_20261104/v2_1/kd_results.csv), [cohort sizes/power](../analysis/output/invalid_construct_kd_union_20261023/fiveprime_20261104/v2_1/cohort_sizes.csv), [expression summaries](../analysis/output/invalid_construct_kd_union_20261023/fiveprime_20261104/v2_1/descriptive_expression.csv), [earlier normal/short audit](../analysis/output/invalid_construct_kd_union_20261023/fiveprime_20261104/report.html).
-
-### Do downstream expression changes agree with strict cells?
-
-**Yes for some recovered cohorts.** This additional analysis learns expression signatures from 15,123 strict complete singlets, holding out 25% of cells for validation. Recovered cells are excluded from training and validation. The target is compared with a non-targeting replacement in the same partner-guide background; any control with detected normal-guide evidence for that target is excluded. All 13 directly perturbed genes are removed from the expression signatures, along with mitochondrial and ribosomal protein genes. Models account for library, expression depth, guide design and partner.
-
-Seven of 12 tested signatures reproduce in held-out strict cells: **CCM2, CEBPB, JUN, KLF2, MEF2C, NFKB1 and TLNRD1**. ADAMTS7, FDX1, KLF4, LAMB2 and ZEB2 are uninformative here; MAPK7 lacks sufficient matched strict cells.
-
-| Newly recovered cells | Minimum rescue molecules | Cells | Downstream signature effect, control SD units | Adjusted P |
-|---|---:|---:|---:|---:|
-| CCM2 | 1 | 33 | 0.91 (95% CI 0.48–1.35) | 0.00033 |
-| CCM2 | 2 | 18 | 0.94 (0.26–1.62) | 0.014 |
-| TLNRD1 | 1 | 30 | 0.64 (0.16–1.11) | 0.037 |
-
-At three rescue molecules, target-level tests remain inconclusive. An **exploratory pooled analysis**, added after inspecting those tests, combines 29 cells across CCM2, MEF2C and TLNRD1. Their signature effect is **0.50 control SD** (95% CI 0.13–0.87; adjusted P = 0.012), compared with **1.29 SD** in matched strict cells. Thus the direction agrees, but the average response is weaker. Pooling weights reference cells to the recovered target distribution and accounts for repeated observations from the same cell. These units measure expression-pattern strength, not percent knockdown or assignment purity.
-
-Recovered cells have lower expression depth and gene detection than strict assigned cells, reinforcing the need for these adjustments. Trans agreement supports retained perturbation-associated biology, but shared responses or cell-state differences remain possible. No shortened-only cohort has enough observations for a target-level trans test. This analysis does not establish that shortening preceded guide activity, or that the shortened RNA itself was active.
-
-Data: [trans-expression report and figure](../analysis/output/invalid_construct_kd_union_20261023/fiveprime_20261104/v2_1/trans/report.html), [strict validation](../analysis/output/invalid_construct_kd_union_20261023/fiveprime_20261104/v2_1/trans/strict_validation.csv), [target contrasts](../analysis/output/invalid_construct_kd_union_20261023/fiveprime_20261104/v2_1/trans/recovery_alignment.csv), [pooled contrasts](../analysis/output/invalid_construct_kd_union_20261023/fiveprime_20261104/v2_1/trans/pooled_alignment.csv), [cell quality](../analysis/output/invalid_construct_kd_union_20261023/fiveprime_20261104/v2_1/cell_quality.csv), [loss-length breakdowns](../analysis/output/invalid_construct_kd_union_20261023/fiveprime_20261104/v2_1/loss_tier_cohorts.csv).
-
-## Recommendation and limits
-
-The release keeps **recovery and GEX source merging off by default**, with an audit preset and an explicitly experimental full opt-in preset. Technical recovery and some downstream phenotype consistency are demonstrated; biological validation is insufficient to promote either endpoint or shortened-spacer recovery to a validated default. More recovered cells with adequate target expression, or a targeted experiment, are needed for that decision.
-
-The 16-nt paper strengthens the rationale, not the release evidence. The preset does not introduce a 16-nt floor or increase the TSO edit limit. Partial TSO and scaffold indels are unsupported. Q1 amplicon QC retains its separate primer-based parser. Real-read false-assignment rates, biological validation of asymmetric/no-iBAR libraries, and production-scale overhead on a dense reference remain unresolved.
+Detailed results: [updated technical tables](../output/grna_spacer_scan_20261023/fiveprime_20261104/v2_1/shared_structure_20261104/technical_combined.csv), [revision manifest](../output/grna_spacer_scan_20261023/fiveprime_20261104/v2_1/jobs/shared_structure_20261104/manifest.json), [updated cis-KD results](../analysis/output/invalid_construct_kd_union_20261023/fiveprime_20261104/v2_1/shared_structure_20261104/kd_results.csv), [updated trans-expression report](../analysis/output/invalid_construct_kd_union_20261023/fiveprime_20261104/v2_1/shared_structure_20261104/trans/report.html). The biological analyses were rerun with the revised assignments and counts; their conclusions were unchanged.

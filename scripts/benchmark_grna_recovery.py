@@ -85,9 +85,12 @@ def worker_config(cfg, ref):
 STATE = {}
 
 
-def init(root, cfg, ref, good, policies, options, contract):
+def init(root, cfg, ref, good, policies, options, contract, frozen=None):
     step3 = load(Path(root) / "scripts/03_match_grna_ibar.py", "bench_step3")
     wc = worker_config(cfg, ref)
+    if options.get('shared'):
+        from relaxed_structure import apply_worker
+        apply_worker(wc, frozen['design_contract'])
     step3._init_worker(wc)
     engine = RecoveryEngine(contract, wc["tso_seq"], wc["anchor_max_mm"], options)
     STATE.update(
@@ -98,6 +101,7 @@ def init(root, cfg, ref, good, policies, options, contract):
         wc=wc,
         contract=contract,
         options=options,
+        frozen=frozen,
     )
 
 
@@ -145,7 +149,7 @@ def process(rows):
         st["wc"],
         recovery_contract=st["contract"],
         recovery_options=st["options"],
-        recovery_policy=make_policy(st["contract"], st["options"], st["policies"]["auto"]),
+        recovery_policy=st["frozen"] or make_policy(st["contract"], st["options"], st["policies"]["auto"]),
     )
     mapper._worker_state.update(
         recovery=engine, recovery_options=st["options"], recovery_policy=wc["recovery_policy"]
@@ -168,11 +172,16 @@ def run(args):
     base = Path(args.output)
     out = base / "technical" / args.library
     out.mkdir(parents=True, exist_ok=False)
-    cfg = yaml.safe_load((base / "configs/auto.yaml").read_text())
+    cfg = yaml.safe_load(Path(args.config).read_text() if args.config else (base / "configs/auto.yaml").read_text())
     ref = pd.read_csv(cfg["paths"]["grna_reference"]).fillna("")
     options = settings(cfg)
     contract = recovery_contract(ref, cfg)
-    frozen = json.loads((base / f"pilot/grna_matches/{args.library}_recovery.json").read_text())
+    if options.get('shared'):
+        from relaxed_structure import load as load_shared
+        frozen = load_shared(cfg, ref)
+        contract = recovery_contract(ref, cfg, frozen['design_contract'])
+    else:
+        frozen = json.loads((base / f"pilot/grna_matches/{args.library}_recovery.json").read_text())
     common = dict(max_loss=3, min_retained=17, endpoint_policy="joint", ibar_corroboration="report")
     policies = {
         "endpoint": dict(common, max_loss=0),
@@ -182,6 +191,8 @@ def run(args):
         "auto": frozen["effective"],
         "ibar_required": dict(common, ibar_corroboration="require"),
     }
+    if options.get('shared'):
+        policies = {'auto': frozen['effective']}
     meta = pd.read_csv(
         root / f"output/grna_gex_invalid_union_20261023_v3/{args.library}/cell_metadata.csv.gz",
         keep_default_na=False,
@@ -213,7 +224,7 @@ def run(args):
         with ProcessPoolExecutor(
             max_workers=args.workers,
             initializer=init,
-            initargs=(str(root), cfg, ref, good, policies, options, contract),
+            initargs=(str(root), cfg, ref, good, policies, options, contract, frozen),
         ) as pool:
             chunks = step3._chunk_generator(
                 str(root / f"output/grna_barcodes/{args.library}_barcodes.tsv.gz"), 100000, True
@@ -397,4 +408,5 @@ if __name__ == "__main__":
     p.add_argument("--library", required=True)
     p.add_argument("--output", required=True)
     p.add_argument("--workers", type=int, default=4)
+    p.add_argument("--config", help="Run the shared-policy arm from this complete config; retain legacy audit columns for benchmark comparisons")
     run(p.parse_args())

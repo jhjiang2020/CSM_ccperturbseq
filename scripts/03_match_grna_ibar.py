@@ -44,12 +44,13 @@ try:
     from scripts.grna_preflight import check_ibar_reference, preflight_options, print_preflight
     from scripts.guide_design import DESIGN_COLUMNS, DesignMatcher, compile_design, emit_warnings, enabled, extract_unit
     from scripts.design_preflight import check_design
-    from scripts import grna_recovery
+    from scripts import grna_recovery, relaxed_structure
 except ModuleNotFoundError:
     from grna_preflight import check_ibar_reference, preflight_options, print_preflight
     from guide_design import DESIGN_COLUMNS, DesignMatcher, compile_design, emit_warnings, enabled, extract_unit
     from design_preflight import check_design
     import grna_recovery
+    import relaxed_structure
 
 
 def resolve_output_root(output_dir, output_namespace=None):
@@ -1190,12 +1191,34 @@ def _process_rows(rows):
     policy = state['recovery_policy']
     matched = {row[0] for row in results}
     results = [tuple(row) + BASELINE_METADATA + (policy['fingerprint'],) for row in results]
+    compact = state['recovery_options'].get('shared', False)
+    corrections = {}
+    name_sequences = defaultdict(set)
+    for reference_row in recovery.contract['rows']:
+        name_sequences[reference_row['grna_name']].add(reference_row['grna_seq'])
+
+    def finish(rows):
+        if not compact:
+            return rows
+        output = []
+        for result in rows:
+            old = result[-len(RECOVERY_COLUMNS):]
+            values = list(result[:-len(RECOVERY_COLUMNS)])
+            sequence_set = name_sequences.get(values[4], set())
+            corrected = next(iter(sequence_set)) if len(sequence_set) == 1 else ''
+            if old[0] != 'baseline':
+                corrected = old[2]
+                values[8] = len(corrected) - len(values[5])
+                values[10] = 'relaxed_structure'
+            output.append(tuple(values) + (corrected, corrections.get(values[0], '')))
+        return output
+
     recovered_ids = set()
     audited_ids = set()
     audit = state['recovery_options']['mode'] == 'audit'
     if not policy['effective'].get('enabled', True):
         stats['recovery_disabled_reads'] += len(rows) - len(matched)
-        return results, discarded, stats
+        return finish(results), discarded, stats
     for row in rows:
         read_id, bc, bci, umi, sequence = row[:5]
         if read_id in matched:
@@ -1213,6 +1236,7 @@ def _process_rows(rows):
                               resolved['ibar_seq'], 'recovery_audit:' + json.dumps(resolved, separators=(',', ':'))))
             continue
         recovered_ids.add(read_id)
+        corrections[read_id] = relaxed_structure.detail(resolved, endpoint, policy)
         stats['recovery_class_' + resolved['recovery_class']] += 1
         stats['recovery_length_' + resolved['recovery_length_state']] += 1
         result = (read_id, bc, bci, umi, resolved['grna_name'], resolved['grna_seq'],
@@ -1226,7 +1250,7 @@ def _process_rows(rows):
         results.append(result + tuple(resolved[column] for column in RECOVERY_COLUMNS))
     discarded = [row for row in discarded if row[0] not in recovered_ids and (row[0] not in audited_ids or row[7].startswith('recovery_audit:'))]
     stats['recovery_added_reads'] += len(recovered_ids)
-    return results, discarded, stats
+    return finish(results), discarded, stats
 
 
 # Keep backward-compatible wrapper for single-process mode
@@ -1357,7 +1381,7 @@ def process_library(barcode_tsv_path, output_path, config_dict, n_processes=1,
 
     if config_dict.get('recovery_contract'):
         RECOVERY_COLUMNS = grna_recovery.RECOVERY_COLUMNS
-        output_cols = output_cols + RECOVERY_COLUMNS
+        output_cols = output_cols + (relaxed_structure.COLUMNS if config_dict["recovery_options"].get("shared") else RECOVERY_COLUMNS)
 
     # Failed reads output path (companion to main output)
     discarded_path = None
@@ -1661,6 +1685,17 @@ def main():
         'save_failed_reads': gm.get('save_failed_reads', False),
     }
 
+    shared_policy = None
+    if relaxed_structure.active(cfg) and not args.preflight_fastq:
+        if args.preflight_only and not args.library and not args.barcode_input:
+            relaxed_structure.build(cfg, ref_df.fillna(''), config_dict, _init_worker,
+                                    _process_rows_baseline, find_tso)
+            return
+        shared_policy = relaxed_structure.load(cfg, ref_df.fillna(''))
+        relaxed_structure.apply_worker(config_dict, shared_policy['design_contract'])
+        if design_contract:
+            frozen_contract = shared_policy['design_contract']
+
     libraries = cfg['libraries']
     if args.barcode_input and not args.library and len(libraries) != 1:
         print("ERROR: --barcode-input requires --library when config has multiple libraries")
@@ -1693,7 +1728,10 @@ def main():
         output_path = os.path.join(output_dir, 'grna_matches', f"{lib_name}_grna_matches.tsv.gz")
         print(f"\n--- Library: {lib_name} ---")
 
-        if preflight_enabled or args.preflight_only:
+        if shared_policy:
+            preflight = shared_policy['preflight'].get('orientation', {}).get(lib_name, {})
+            print(f'  Shared structure policy [{lib_name}]: {shared_policy["fingerprint"]}')
+        elif preflight_enabled or args.preflight_only:
             fastq_paths = None
             if args.preflight_fastq:
                 fastq_paths = sorted(Path(cfg['paths']['fastq_dir']).glob(
@@ -1740,11 +1778,17 @@ def main():
         config_dict.pop('recovery_contract', None)
         if grna_recovery.settings(cfg)['mode'] == 'auto':
             _init_worker(config_dict)
-        prepare_recovery(cfg, ref_df.fillna(''), config_dict, barcode_tsv,
-                         Path(output_dir) / 'grna_matches', lib_name, raw_fastq=bool(args.preflight_fastq), baseline_processor=_process_rows_baseline)
+        if shared_policy:
+            relaxed_structure.attach(config_dict, shared_policy, cfg, ref_df.fillna(''),
+                                     Path(output_dir) / 'grna_matches', lib_name)
+        elif not relaxed_structure.active(cfg):
+            prepare_recovery(cfg, ref_df.fillna(''), config_dict, barcode_tsv,
+                             Path(output_dir) / 'grna_matches', lib_name, raw_fastq=bool(args.preflight_fastq), baseline_processor=_process_rows_baseline)
         if args.preflight_only:
             continue
 
+        if Path(output_path).exists():
+            print(f'WARNING: rebuilding guide matches at {output_path}; downstream guide calls must be rebuilt.')
         # Run 100k-read sampling to detect truncated gRNA lengths (short-read mode)
         if short_read_mode:
             print(f"  Sampling first 100,000 reads to detect gRNA lengths...")
@@ -1778,6 +1822,8 @@ def main():
         all_stats[lib_name] = dict(stats)
 
         total = stats['total_reads']
+        if shared_policy:
+            relaxed_structure.write_completion(output_path, lib_name, shared_policy)
         exact = stats.get('exact_match', 0)
         fuzzy = stats.get('fuzzy_match', 0)
         grna_only = stats.get('grna_only_match', 0)

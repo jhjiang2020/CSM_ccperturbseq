@@ -1,6 +1,10 @@
 # v2.1 plan: recover guide evidence without forcing identity
 
-Status: implementation and four-library benchmarks completed, 4 November 2026. Automatic recovery adds 4,931,644 reads, 437 assigned cells and 694 missing partners, with a net gain of 127 singlets. The primary biological gate is inconclusive, so recovery remains optional and the recommended starting preset is audit-only. The consolidated [v2.1 guide](GRNA_RECOVERY_V2_1_EVIDENCE.md) records activation, parameters, results and limits.
+Historical design plan. Use the [current configuration and evidence guide](GRNA_RECOVERY_V2_1_EVIDENCE.md)
+for runs and restarts. The configuration names and separate audit/preset workflow
+below have been superseded by `grna_structure.relaxed_structure` in the normal
+run config. The original benchmark and scientific release criteria are retained
+here for provenance; biological validation remains partial.
 
 Implementation scope: Steps 2–5 use the shared recovery policy; Step 1c reuses the dedicated library's frozen policy. Q1 amplicon QC keeps its separate primer-based parser. Partial TSO, scaffold indels and larger TSO edit limits remain deferred experimental extensions. Asymmetric/no-iBAR compatibility is tested with fixtures; the pilot supplies biological data only for its own layout. This document preserves the original design and release criteria below, including criteria that the pilot could not establish.
 
@@ -60,24 +64,8 @@ Do not use target expression or knockdown to tune these settings. Biological val
 
 Implemented configuration interface:
 
-```yaml
-grna_recovery:
-  mode: auto                    # off | audit | auto | manual
-  tso:
-    endpoint_policy: joint
-    max_edit_distance: 3
-    partial_tso: false
-  spacer:
-    max_5prime_loss: 3
-    min_retained: auto           # evaluate 18, then 17 where supported
-    retained_edit_distance: 0
-  ibar_corroboration: report     # report | require
-  pilot:
-    sample_reads: 100000
-    split_by: cell_umi
-    seed: 21
-  resolved_contract: null
-```
+The original configuration proposal has been replaced by the annotated
+`grna_structure.relaxed_structure` block in the [current guide](GRNA_RECOVERY_V2_1_EVIDENCE.md#configure-once).
 
 Manual settings may narrow or explicitly test a policy; they must not force an ambiguous identity. Exact thresholds for admitting a newly recovered unit to a cell are also benchmarked at 1, 2 and 3 rescue UMIs while retaining the existing pair threshold. The current three-UMI KD threshold is not itself an established optimal assignment threshold.
 

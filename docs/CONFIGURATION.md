@@ -99,17 +99,18 @@ merely to suppress orientation warnings in a dual-guide analysis.
 
 ## Optional v2.1 guide recovery
 
-`grna_recovery.mode` defaults to `off`. Merge the
-[audit overlay](../examples/grna_recovery_v2_1.yaml) into a complete config;
-select `auto` to enable recovery after data-driven validation or `manual` for
-fixed limits. The [full opt-in preset](../examples/grna_recovery_v2_1_enabled.yaml)
-also enables `gex_decontamination.step1c.enabled` and
-`gex_decontamination.combine_with_grna_arm.enabled` so accepted GEX guide reads
-contribute to final calls. This requires the v2.1 scripts, not just a YAML edit in v2.0.
-The [consolidated guide](GRNA_RECOVERY_V2_1_EVIDENCE.md) lists every changed
-parameter, how to freeze/reuse the policy, and the measured technical and
-biological gains. Existing general guide matching, UMI correction and cell
-assignment thresholds are retained.
+The standard templates contain `grna_structure.relaxed_structure: false` and
+annotated `relaxed_*` limits. Change it to `auto` for one pilot-selected setting
+shared by all sublibraries, or `true` to apply specified limits. To also include
+captured GEX guide evidence, enable the existing
+`gex_decontamination.step1c.enabled` and
+`gex_decontamination.combine_with_grna_arm.enabled` switches.
+
+Edit these entries in the same run config; no overlay is needed. The
+[annotated configuration and evidence guide](GRNA_RECOVERY_V2_1_EVIDENCE.md)
+explains each parameter, pros/cons, measured gains and safe restarts. A v2.1 code
+upgrade is required before using the option. General guide edit distances, UMI
+correction and cell-assignment thresholds remain unchanged.
 
 ## Step 1a: GEX backend, assignment and UMI correction
 

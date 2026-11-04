@@ -144,7 +144,7 @@ gex_decontamination:
     keep_rejected_raw_pairs_after_step1c: true
     write_read_decisions: false
   step1c:
-    enabled: false
+    enabled: false  # v2.1 opt-in: identify guide evidence captured from GEX
     output_namespace: "gex_grna_identity"
     strict_matching:
       enabled: true
@@ -153,7 +153,7 @@ gex_decontamination:
       require_resolved_ibar_in_dual_mode: true
       reject_ibar_decoupled: true
   combine_with_grna_arm:
-    enabled: false
+    enabled: false  # v2.1 opt-in: include accepted GEX reads before UMI correction
     combine_before_umi_collapse: true
     retain_source_provenance: true
   existing_alignment:
@@ -227,6 +227,20 @@ libraries:
 # Mismatches in fixed sequences do NOT affect gRNA/iBAR assignment —
 # they are only used as positional anchors.
 grna_structure:
+  # Optional v2.1 recovery; edit here in this same run config.
+  # false: standard calls. auto: pilot scan selects one policy for all sublibraries.
+  # true: apply the limits below without pilot selection.
+  relaxed_structure: false
+  relaxed_max_5prime_loss: 3  # maximum loss from each reference spacer's own 5' end
+  relaxed_min_retained: 17   # minimum retained nt; auto may choose a higher floor
+  relaxed_max_tso_shift: 3   # maximum endpoint shift (nt) from the standard TSO call
+  relaxed_min_quality: 30   # minimum Phred score of every retained spacer base
+  relaxed_require_ibar: false  # report agreement; true requires it where iBAR exists
+  # Exact retained sequence and unique guide identity are always required.
+  # To also include GEX guide reads, enable the existing step1c and
+  # combine_with_grna_arm switches under gex_decontamination.
+  # Configuration, restart warnings and gains: docs/GRNA_RECOVERY_V2_1_EVIDENCE.md
+
   # Whether to use single-guide mode. If true, skips reading/enforcing stem-specific fixed_seq_3 and fixed_seq_5.
   single_guide_mode: false
   # Split_TSO: universal anchor at the start of R1 (Parse template-switching oligo)

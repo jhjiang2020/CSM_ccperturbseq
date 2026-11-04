@@ -176,6 +176,30 @@ def settings_identity(config):
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
+def guide_restart_compatible(saved_hash, config):
+    """Prove that only guide-only enable switches changed in old full hashes.
+
+    No GEX filter, alignment, counting, sample or barcode change is accepted.
+    Existing manifests remain immutable; all artifact checks still run.
+    """
+    if saved_hash == settings_identity(config):
+        return True
+    import copy
+    from itertools import product
+    for first, second in product((False, True, None), repeat=2):
+        candidate = copy.deepcopy(config)
+        decontam = candidate.setdefault('gex_decontamination', {})
+        for name, value in (('step1c', first), ('combine_with_grna_arm', second)):
+            section = decontam.setdefault(name, {})
+            if value is None:
+                section.pop('enabled', None)
+            else:
+                section['enabled'] = value
+        if settings_identity(candidate) == saved_hash:
+            return True
+    return False
+
+
 def check_counting_settings(config, process):
     """Bind shared-counter runs before Parse can skip existing intermediates."""
     options = backend_options(config)
@@ -296,7 +320,7 @@ def validate_completion(config, config_path, library, *, verify_outputs=True, ve
         raise ValueError("Backend mismatch in GEX completion manifest")
     if payload.get("schema_version") != SCHEMA or payload.get("complete") is not True:
         raise ValueError("Incomplete GEX Step 1a")
-    if payload.get("library") != library or payload.get("settings_sha256") != settings_identity(config):
+    if payload.get("library") != library or not guide_restart_compatible(payload.get("settings_sha256"), config):
         raise ValueError("Stale GEX library/configuration; rerun Step 1a")
     if options["backend"] == "kallisto":
         reference = resolve_path(options["reference_dir"], config_path)
@@ -344,8 +368,8 @@ def validate_combined(config, config_path, *, verify_outputs=True):
     payload = json.loads((destination / completion_name(options)).read_text())
     if payload.get("schema_version") != SCHEMA or payload.get("complete") is not True or payload.get("backend") != options["backend"]:
         raise ValueError("Incomplete GEX Step 1b")
-    if payload.get("settings_sha256") != settings_identity(config):
-        raise ValueError("Stale combined GEX configuration")
+    if not guide_restart_compatible(payload.get("settings_sha256"), config):
+        raise ValueError("Stale combined GEX configuration: only guide recovery/merge enable switches may change during a guide-only restart; preserve the prior config and rerun GEX for other changes")
     expected = {lib["sublibrary_name"] for lib in config["libraries"]}
     if set(payload.get("sources", {})) != expected:
         raise ValueError("Combined GEX library set is stale")

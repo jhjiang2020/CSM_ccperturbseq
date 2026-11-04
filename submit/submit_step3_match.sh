@@ -50,6 +50,12 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 LOG_DIR=$(python3 -c "import yaml; print(yaml.safe_load(open('${CONFIG}'))['paths'].get('log_dir', '${PROJECT_DIR}/logs'))")
 mkdir -p "${LOG_DIR}"
 
+# The master schedules one shared pilot after every Step-2 task has finished.
+if [[ "${CSM_GRNA_PREFLIGHT:-false}" == "true" ]]; then
+    python -u "${SCRIPTS_DIR}/03_match_grna_ibar.py" --config "${CONFIG}" --preflight-only
+    exit 0
+fi
+
 # --- Map task ID to sublibrary ---
 LIB_NAME=$(python3 -c "
 import yaml

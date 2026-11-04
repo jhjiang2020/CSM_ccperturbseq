@@ -2,23 +2,21 @@
 
 ## v2.1 (2026-11-04)
 
-- Added opt-in guide recovery using the joint TSO, spacer and scaffold layout.
-  Shortening is limited relative to each reference guide; ambiguous identities
-  remain unresolved. Existing successful read calls are preserved.
-- Added automatic settings from a bounded whole-library sample, held-out
-  cell/UMI validation and frozen policies. iBAR corroboration is optional;
-  it does not determine spacer identity.
-- Added recovery provenance through joint UMI counting and AnnData, with
-  support for asymmetric and absent iBARs. Step 1c reuses the dedicated policy.
-- Added a full opt-in preset combining relaxed matching with GEX guide identity
-  recovery and source merging; standard presets retain both switches off.
-- Recovery-enabled submissions order Step 1c after the dedicated frozen policy;
-  audit mode preserves standard counts. Unquoted YAML `off` is accepted.
-- See the [consolidated configuration and evidence guide](docs/GRNA_RECOVERY_V2_1_EVIDENCE.md).
-  The full benchmark adds 4,931,644 reads and 437 assigned cells, with 127 net
-  additional singlets. Primary knockdown validation is inconclusive, so recovery
-  remains off when unspecified and the recommended starting preset is audit-only.
-  Synthetic accuracy is not a real-read purity estimate.
+- Added `grna_structure.relaxed_structure` and annotated limits to the standard
+  configs. Automatic selection uses one validated policy across all sublibraries,
+  including TSO endpoint shifts, spacer shortening and iBAR orientation checks.
+- Recovery requires unique spacer identity and observed scaffold anchors.
+  iBAR corroboration is optional; absent/asymmetric-iBAR constructs are supported.
+- Existing GEX identity/merge switches include captured guide reads before UMI
+  filtering and correction. A guide-only `--step 3,4,5` restart includes Step 1c
+  when enabled, while reusing GEX expression products.
+- Compact read/count provenance records relaxed calls. Step 5 stores policy and
+  molecule summaries in AnnData and archives the previous file with a warning
+  that downstream annotations are not merged. Stale config/input checks remain.
+- Defaults stay off. The [configuration and evidence guide](docs/GRNA_RECOVERY_V2_1_EVIDENCE.md)
+  summarizes technical gains and biological limits. The updated four-library benchmark gained
+  4.92 million matched reads and 437 assigned cells, but only 127 net singlets;
+  primary cis-KD and shortened-only efficacy remain inconclusive.
 
 ## v2.0 (2026-10-23)
 

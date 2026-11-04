@@ -48,8 +48,20 @@ def load_design_metadata(output_dir, libraries):
     return metadata
 
 
-def attach_recovery_metadata(adata, output_dir, libraries, gex_namespace='gex_grna_identity'):
+def attach_recovery_metadata(adata, output_dir, libraries, gex_namespace='gex_grna_identity', compact=False, sources=('dedicated', 'combined', 'gex')):
     """Attach guide-evidence provenance without touching expression counts."""
+    if compact:
+        policy = Path(output_dir) / 'grna_matches/relaxed_structure.json'
+        metadata = {'policy': policy.read_text(), 'molecule_counts': {}}
+        for source in sources:
+            base = Path(output_dir) / (gex_namespace if source == 'gex' else '') / 'grna_assignment'
+            path = base / f'grna_recovery_cells_{source}.csv.gz'
+            if path.is_file():
+                table = pd.read_csv(path, index_col='bc_wells')
+                table.index = pd.Index(table.index.astype(str), dtype=object, name='bc_wells')
+                metadata['molecule_counts'][source] = table
+        adata.uns['grna_structure'] = metadata
+        return
     recovery_policies = {}
     for library in libraries:
         name = library['sublibrary_name']
@@ -318,6 +330,20 @@ def main():
         'output_namespace', 'gex_grna_identity'
     )
     combined_calls = bool(combine_cfg.get('enabled', False))
+    recovery_sources = ['dedicated']
+    if step1c_cfg.get('enabled', False) or combined_calls:
+        recovery_sources.append('gex')
+    if combined_calls:
+        recovery_sources.append('combined')
+    if 'relaxed_structure' in cfg.get('grna_structure', {}):
+        try:
+            from scripts import relaxed_structure
+        except ModuleNotFoundError:
+            import relaxed_structure
+        policy = relaxed_structure.load(cfg, pd.read_csv(cfg['paths']['grna_reference'], keep_default_na=False)) if relaxed_structure.active(cfg) else None
+        for source in recovery_sources:
+            directory = Path(output_dir) / (gex_namespace if source == 'gex' else '') / 'grna_assignment'
+            relaxed_structure.validate_assignment(cfg, directory, source, policy)
     final_guide_source = 'combined' if combined_calls else 'dedicated'
     final_product_paths = _guide_product_paths(
         output_dir, final_guide_source, gex_namespace
@@ -599,7 +625,9 @@ def main():
         from scripts.guide_design import enabled
     except ModuleNotFoundError:
         from guide_design import enabled
-    if (cfg.get('grna_recovery') or {}).get('mode', 'off') not in ('off', False):
+    if cfg.get('grna_structure', {}).get('relaxed_structure', False) is not False:
+        attach_recovery_metadata(adata, output_dir, cfg['libraries'], gex_namespace, compact=True, sources=recovery_sources)
+    elif (cfg.get('grna_recovery') or {}).get('mode', 'off') not in ('off', False):
         attach_recovery_metadata(adata, output_dir, cfg['libraries'], gex_namespace)
     design_metadata = load_design_metadata(output_dir, cfg['libraries']) if enabled(cfg) else {}
     if design_metadata:
@@ -615,7 +643,11 @@ def main():
     # --- 8. Save ---
     print("\n  8. Saving combined AnnData...")
     final_path = os.path.join(output_dir, 'combined_adata.h5ad')
-    adata.write_h5ad(final_path)
+    try:
+        from scripts.grna_restart import write_anndata
+    except ModuleNotFoundError:
+        from grna_restart import write_anndata
+    write_anndata(adata, final_path)
     print(f"     Saved: {final_path}")
     print(f"     Shape: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
     print(f"     obsm keys: {list(adata.obsm.keys())}")

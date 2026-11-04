@@ -81,6 +81,7 @@ _DEFAULTS = {
     'step1c_aggregate': (4, 32, 8, None, None),
     'step2': (1, 4, 12, None, None),
     'step3': (8, 4, 12, None, None),
+    'step3_pilot': (1, 8, 8, None, None),
     'step4': (4, 32, 4, None, None),
     'step5': (1, 32, 4, None, None),
     'kallisto_reference': (8, 8, 12, None, 'RedHat8'),
@@ -385,7 +386,23 @@ def pipeline(config_path, steps, dry_run):
         recovery_mode = 'off'
     if recovery_mode not in ('off', 'audit', 'auto', 'manual'):
         raise ValueError('Invalid grna_recovery.mode')
-    if enabled and recovery_mode != 'off' and '1' in selected:
+    structure = cfg.get('grna_structure', {})
+    relaxed = structure.get('relaxed_structure', False)
+    if relaxed not in (False, True, 'auto') or (isinstance(relaxed, (int, float)) and not isinstance(relaxed, bool)):
+        raise ValueError('grna_structure.relaxed_structure must be false, true or auto')
+    if 'relaxed_structure' in structure and recovery:
+        raise ValueError('Use grna_structure.relaxed_structure; remove the old grna_recovery section')
+    if relaxed is not False:
+        if '3' not in selected and enabled and '1' in selected:
+            policy = Path(cfg['paths']['output_dir']) / 'grna_matches/relaxed_structure.json'
+            if not policy.is_file():
+                raise ValueError('Step 1c needs a frozen shared policy; include Step 3 or run its preflight first')
+        first, combine, gex, aggregate, barcodes, match, assign, integrate = stages
+        pilot = ('3', 'step3_pilot', 'csm_step3_pilot', 'submit_step3_match.sh', False, ['step2'])
+        match = (*match[:-1], ['step3_pilot'])
+        gex = (*gex[:-1], ['step1a', 'step3'])
+        stages = [first, combine, barcodes, pilot, match, gex, aggregate, assign, integrate]
+    elif enabled and recovery_mode != 'off' and ('1' in selected or '3' in selected):
         if '3' not in selected:
             frozen = recovery.get('resolved_contract')
             if frozen:
@@ -407,13 +424,17 @@ def pipeline(config_path, steps, dry_run):
     print(f'Config: {config_path}\nProject: {project}\nLibraries: {count}\nLogs: {logs}')
     for group, profile, name, script, array, dependencies in stages:
         if group == '1c':
-            if '1' not in selected or not enabled:
+            if not ({'1', '3'} & selected) or not enabled:
                 continue
         elif group not in selected:
             continue
         r = resources[profile]
         print(f'{profile}: {r.slots} slots x {r.h_vmem} = {r.slots * r.memory_per_slot_gb:g}G; {r.h_rt}', flush=True)
         extra_env = ',CSM_STEP1C_GEX_READY=true' if profile == 'step4' and 'step1c_aggregate' in jobs else ''
+        if profile == 'step3_pilot':
+            extra_env += ',CSM_GRNA_PREFLIGHT=true'
+        if profile == 'step5' and (Path(cfg['paths'].get('output_dir', project / 'output')) / 'combined_adata.h5ad').exists():
+            print('WARNING: Step 5 rebuilds combined_adata.h5ad. Existing downstream annotations are not merged; the old file will be archived before replacement.', flush=True)
         options = ['-N', name, '-j', 'y', '-v', env + extra_env,
                    '-o', str(logs / (profile + '.$JOB_ID' + ('.$TASK_ID' if array else '') + '.log'))]
         if array:

@@ -15,28 +15,18 @@ from test_guide_design import STEP4
 
 
 class RecoveryLaunchTests(unittest.TestCase):
-    def test_full_opt_in_enables_gex_identity_and_merged_calls(self):
+    def test_standard_templates_annotate_one_opt_in(self):
         project = Path(__file__).resolve().parents[1]
-        full = yaml.safe_load((project / "examples/grna_recovery_v2_1_enabled.yaml").read_text())
-        audit = yaml.safe_load((project / "examples/grna_recovery_v2_1.yaml").read_text())
-        standard = yaml.safe_load((project / "config_single.yaml").read_text())
-        self.assertEqual(settings(full)["mode"], "auto")
-        self.assertEqual(settings(audit)["mode"], "audit")
-        self.assertNotIn("gex_decontamination", audit)
-        for key in ("step1c", "combine_with_grna_arm"):
-            self.assertTrue(full["gex_decontamination"][key]["enabled"])
-            self.assertFalse(standard["gex_decontamination"][key]["enabled"])
-        self.assertTrue(full["gex_decontamination"]["step1c"]["strict_matching"]["enabled"])
-        with tempfile.TemporaryDirectory() as tmp:
-            path = self.config(Path(tmp), "auto")
-            config = yaml.safe_load(path.read_text())
-            config.update(full)
-            path.write_text(yaml.safe_dump(config))
-            with patch("scripts.uger_resources.submit", side_effect=[str(i) for i in range(100, 108)]) as submit:
-                pipeline(path, "all", False)
-            calls = {c.args[1]: c.args[2] for c in submit.call_args_list}
-            self.assertEqual(calls["step1c"][calls["step1c"].index("-hold_jid") + 1], "100,103")
-            self.assertIn("CSM_STEP1C_GEX_READY=true", ",".join(calls["step4"]))
+        for name in ('config_single.yaml', 'config_dual.yaml', 'config_rgupta.yaml',
+                     'config_rgupta_single.yaml', 'config_rgupta_single_no_ibar.yaml'):
+            cfg = yaml.safe_load((project / name).read_text())
+            self.assertNotIn('grna_recovery', cfg)
+            self.assertFalse(cfg['grna_structure']['relaxed_structure'])
+            self.assertEqual(settings(cfg)['mode'], 'off')
+            for key in ('step1c', 'combine_with_grna_arm'):
+                self.assertFalse(cfg['gex_decontamination'][key]['enabled'])
+            cfg['grna_structure']['relaxed_structure'] = 'auto'
+            self.assertEqual(settings(cfg)['mode'], 'auto')
 
     def config(self, root, mode):
         path = root / "config.yaml"

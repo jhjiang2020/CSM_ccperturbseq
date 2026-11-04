@@ -244,6 +244,12 @@ def install_strict_match_product(match_output, config, library):
                 counts['dropped_structure_conflict'] += 1
                 continue
             guide_distance = int(row["grna_dist"])
+            if row.get('match_type') == 'relaxed_structure':
+                detail = json.loads(row.get('structure_correction') or '{}')
+                observed, corrected = row.get('grna_seq', ''), row.get('grna_seq_corrected', '')
+                if detail.get('retained_edits') != 0 or not observed or not corrected.endswith(observed) or len(corrected)-len(observed) != guide_distance:
+                    raise ValueError('Invalid relaxed spacer correction in Step 1c evidence')
+                guide_distance = 0  # Accepted structural loss is not a retained-sequence mismatch.
             ibar_distance = int(row["ibar_dist"])
             resolved_ibar = str(row.get("ibar_seq_corrected", "")).strip()
             ibar_decoupled = str(row.get("ibar_decoupled", "")).strip().lower() in {
@@ -275,7 +281,7 @@ def main():
     parser.add_argument("--config", required=True)
     parser.add_argument("--library", required=True)
     parser.add_argument("--input-manifest", required=True)
-    parser.add_argument("--output-namespace", default="gex_grna_identity")
+    parser.add_argument("--output-namespace", default=None)
     parser.add_argument("--n_processes", type=int, default=None)
     parser.add_argument("--max_reads", type=int, default=0)
     parser.add_argument("--chunk_size", type=int, default=100_000)
@@ -286,6 +292,8 @@ def main():
     manifest = Path(args.input_manifest).expanduser().resolve()
     with config_path.open() as handle:
         config = yaml.safe_load(handle)
+    if args.output_namespace is None:
+        args.output_namespace = (config.get('gex_decontamination', {}).get('step1c', {}) or {}).get('output_namespace', 'gex_grna_identity')
     configured_libraries = {
         row["sublibrary_name"] for row in config.get("libraries", [])
     }
@@ -310,10 +318,6 @@ def main():
     if args.dry_run:
         print(" ".join(step3))
         return
-    if completion_path.exists():
-        raise RuntimeError(
-            f"refusing stale/existing Step 1c completion record: {completion_path}"
-        )
 
     print(f"Step 1c source library: {args.library}")
     print(f"Step 1a evidence manifest: {manifest}")
@@ -323,7 +327,12 @@ def main():
     )
     warn_if_ibar_unobservable(config, manifest)
     recovery = config.get('grna_recovery', {}) or {}
-    if recovery.get('mode', 'off') not in ('off', False) and not recovery.get('resolved_contract'):
+    shared_relaxed = config.get('grna_structure', {}).get('relaxed_structure', False) is not False
+    if shared_relaxed:
+        shared = Path(config['paths']['output_dir']) / 'grna_matches/relaxed_structure.json'
+        if not shared.is_file():
+            raise ValueError('Run shared Step 3 preflight before Step 1c')
+    elif recovery.get('mode', 'off') not in ('off', False) and not recovery.get('resolved_contract'):
         frozen = Path(config['paths']['output_dir']) / 'grna_matches' / f'{args.library}_recovery.json'
         if not frozen.is_file():
             raise ValueError('Run dedicated-gRNA recovery preflight first; Step 1c must reuse its frozen policy')
@@ -343,6 +352,13 @@ def main():
         effective_path.parent.mkdir(parents=True, exist_ok=True)
         effective_path.write_text(yaml.safe_dump(effective_config, sort_keys=False))
         step3[step3.index('--config') + 1] = str(effective_path)
+    # A prior interrupted attempt can have products without a completion marker.
+    # Preserve those as well before rebuilding under the current config hash.
+    try:
+        from scripts.grna_restart import archive_step1c
+    except ModuleNotFoundError:
+        from grna_restart import archive_step1c
+    archive_step1c(namespace_root, args.library)
     subprocess.run(step3, check=True)
 
     barcode_output = barcode_input
@@ -359,6 +375,12 @@ def main():
         match_output, config, args.library
     )
 
+    if shared_relaxed:
+        try:
+            from scripts.relaxed_structure import write_completion
+        except ModuleNotFoundError:
+            from relaxed_structure import write_completion
+        write_completion(match_output, args.library, json.loads(shared.read_text()))
     step3_stats_path = (
         namespace_root / "grna_matches" / f"{args.library}_matching_stats.yaml"
     )

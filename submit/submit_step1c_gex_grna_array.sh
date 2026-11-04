@@ -52,7 +52,8 @@ with open('${CONFIG}') as handle:
     print(yaml.safe_load(handle)['paths']['output_dir'])
 ")
 MANIFEST_ROOT="${CSM_STEP1C_MANIFEST_ROOT:-${OUTPUT_DIR}/gex_grna_filter}"
-OUTPUT_NAMESPACE="${CSM_STEP1C_OUTPUT_NAMESPACE:-gex_grna_identity}"
+CONFIG_NAMESPACE=$(python3 -c 'import sys,yaml; cfg=yaml.safe_load(open(sys.argv[1])); print(cfg.get("gex_decontamination", {}).get("step1c", {}).get("output_namespace", "gex_grna_identity"))' "${CONFIG}")
+OUTPUT_NAMESPACE="${CSM_STEP1C_OUTPUT_NAMESPACE:-${CONFIG_NAMESPACE}}"
 INPUT_MANIFEST="${MANIFEST_ROOT}/${LIB_NAME}/rejected_pairs.complete.json"
 
 echo "=========================================="

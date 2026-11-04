@@ -11,14 +11,13 @@ compute environment. Access to the rgupta folder is not required.
 
 ## What changes in v2.1
 
-Guide recovery is now **opt-in**, with joint TSO/spacer interpretation, automatic
-reference-aware limits and optional iBAR corroboration. Existing configurations
-keep standard matching. The four-library benchmark adds 4.93 million matched
-reads and 437 assigned cells (127 net singlets); biological support is partial.
-See the [single guide to settings, rationale and evidence](docs/GRNA_RECOVERY_V2_1_EVIDENCE.md)
-the [audit-first overlay](examples/grna_recovery_v2_1.yaml), and the
-[full opt-in preset](examples/grna_recovery_v2_1_enabled.yaml), which also adds
-accepted GEX-derived guide evidence to final calls.
+Set `grna_structure.relaxed_structure: auto` in your normal run config to
+recover uniquely identified short spacers and uncertain TSO boundaries. One
+pilot-selected policy is shared by every sublibrary; iBAR corroboration is
+optional. Existing GEX identity/merge switches can also add captured guide reads.
+Defaults remain unchanged. The [configuration and evidence guide](docs/GRNA_RECOVERY_V2_1_EVIDENCE.md)
+provides the annotated settings, guide-only restart instructions, measured gains
+and biological limits. No separate overlay is needed.
 
 ## Features retained from v2.0
 

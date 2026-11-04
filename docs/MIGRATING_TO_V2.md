@@ -5,6 +5,13 @@ Use a complete v2.0 checkout and a copied run configuration. Parse remains
 repository wrappers, native counting, validation and sparse combination.
 There is no requirement to copy data or software from the rgupta folder.
 
+For an existing v2.0 run that only needs **v2.1 guide recovery**, keep the GEX
+products and follow the [guide-only restart instructions](GRNA_RECOVERY_V2_1_EVIDENCE.md#run-or-restart).
+That workflow uses `grna_structure.relaxed_structure` and the existing GEX merge
+switches in the same config. It checks compatible hashes and archives the old
+AnnData because downstream annotations are not merged into the rebuilt file.
+The broader backend/counting migrations below still require separate outputs.
+
 ## Preserve the baseline
 
 Keep the old config, output, logs and reference identities read-only. Record

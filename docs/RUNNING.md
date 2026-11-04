@@ -40,7 +40,10 @@ bash submit/submit_pipeline.sh --config "${CONFIG}" --step 4,5
 
 Omitted prerequisites must already be complete under the configured output
 root. `--step 1` means the Step 1a array, Step 1b, and optional Step 1c array and
-aggregate. There is no `--step 1a` selector. Steps 2–4 remain the dedicated-guide
+aggregate. There is no `--step 1a` selector. With `--step 3,4,5`, enabled Step 1c and its aggregation also rerun using existing
+GEX evidence; Step 1a/1b are not scheduled. Relaxed recovery runs one shared pilot
+before per-library matching. See [guide-recovery restart checks](GRNA_RECOVERY_V2_1_EVIDENCE.md#run-or-restart).
+Steps 2–4 remain the dedicated-guide
 path regardless of GEX backend.
 
 The actual dependency graph is in the [detailed workflow](DETAILED_WORKFLOW.md#uger-job-dependency-chain).
@@ -199,9 +202,9 @@ Do not create marker files manually to bypass a failed validation.
 | --- | --- |
 | STAR ↔ kallisto, GEX UMI flavor, gene/transcript policy or expression reference | New output namespace; rerun Step 1a/1b and Step 5. Preserve/recreate compatible guide products in the new namespace. |
 | Guide reference/construct interpretation or GEX removal policy | Regenerate affected Step 1 filtering/evidence and guide Steps 2–4 as appropriate, then Step 5. Reference hashes intentionally reject stale evidence. |
-| Step 3 matching settings | Rerun 3, 4 and 5; include Step 1c if its matching/acceptance interpretation changed. |
+| Step 3 matching settings or `relaxed_structure` | Rerun `--step 3,4,5`; enabled Step 1c is included automatically. All sublibraries share the pilot policy. |
 | Step 4 guide threshold or gRNA UMI settings | Rerun 4 and 5 from complete compatible read-match evidence. |
-| Enable source merging | Require complete Step 1c plus dedicated Step 3; rebuild 4 and 5 with both source options enabled. |
+| Enable source merging | Use `--step 3,4,5` to refresh dedicated and Step 1c evidence under the edited config, then jointly count and rebuild AnnData. Requires captured GEX evidence. |
 | Failed Step 1a task | Inspect the error and its files; preserve the failed attempt for diagnosis before retrying in a clean destination when state is uncertain. |
 
 Avoid editing backend/UMI settings on an old output root and merely rerunning

@@ -43,7 +43,24 @@ def fingerprint(value):
 
 
 def settings(config):
+    structure = config.get("grna_structure", {}) or {}
+    shared = "relaxed_structure" in structure
     raw = config.get("grna_recovery", {}) or {}
+    if shared:
+        value = structure["relaxed_structure"]
+        if value not in (False, True, "auto") or isinstance(value, (int, float)) and not isinstance(value, bool):
+            raise ValueError("grna_structure.relaxed_structure must be false, true or auto")
+        if raw:
+            raise ValueError("Use grna_structure.relaxed_structure; do not combine it with grna_recovery")
+        raw = {
+            "mode": "auto" if value == "auto" else "manual" if value else "off",
+            "spacer": {"max_5prime_loss": structure.get("relaxed_max_5prime_loss", 3),
+                       "min_retained": structure.get("relaxed_min_retained", 17),
+                       "min_quality": structure.get("relaxed_min_quality", 30)},
+            "ibar_corroboration": "require" if structure.get("relaxed_require_ibar", False) else "report",
+        }
+        if value == "auto" and "relaxed_min_retained" not in structure:
+            raw["spacer"]["min_retained"] = "auto"
     if not isinstance(raw, dict):
         raise ValueError("grna_recovery must be a mapping")
     # PyYAML reads an unquoted YAML `off` as False.
@@ -102,6 +119,13 @@ def settings(config):
         raise ValueError("v2.1 recovery requires exact retained spacer sequence")
     if pilot.get("split_by", "cell_umi") != "cell_umi":
         raise ValueError("Recovery validation must split by cell_umi")
+    if shared:
+        result["shared"] = True
+        result["max_tso_shift"] = structure.get("relaxed_max_tso_shift", 3)
+        if isinstance(result["max_tso_shift"], bool) or not isinstance(result["max_tso_shift"], int) or not 0 <= result["max_tso_shift"] <= 10:
+            raise ValueError("relaxed_max_tso_shift must be an integer from 0 to 10")
+        if not isinstance(structure.get("relaxed_require_ibar", False), bool):
+            raise ValueError("relaxed_require_ibar must be true or false")
     return result
 
 
@@ -329,6 +353,9 @@ class RecoveryEngine:
             for c in credible
             if c["loss"] <= p["max_loss"]
             and (c["loss"] == 0 or c["retained_length"] >= p["min_retained"])
+            and (p.get("max_tso_shift") is None or
+                 original_endpoint is not None and original_endpoint >= 0 and
+                 abs(c["tso_end"] - original_endpoint) <= p["max_tso_shift"])
         ]
         if not eligible:
             return None, "outside_length_policy"
@@ -390,6 +417,8 @@ def make_policy(contract, options, effective=None):
         endpoint_policy=options["endpoint_policy"],
         ibar_corroboration=options["ibar_corroboration"],
     )
+    if "max_tso_shift" in options and "max_tso_shift" not in selection:
+        selection["max_tso_shift"] = options["max_tso_shift"]
     payload = dict(
         schema_version=SCHEMA_VERSION,
         reference_fingerprint=contract["fingerprint"],
@@ -452,6 +481,9 @@ def preflight(rows, contract, config, options, sampling=None, baseline_ids=None)
             if len({(c["position"], c["designed_spacer"], c["tso_end"]) for c in full}) == 1:
                 truth.append((row, full[0]))
     floors = [18, 17] if options["min_retained"] == "auto" else [options["min_retained"]]
+    if options.get("shared") and options["mode"] == "auto" and options["min_retained"] != "auto":
+        floors = sorted({18, 17, options["min_retained"]}, reverse=True)
+        floors = [floor for floor in floors if floor >= options["min_retained"]]
     policies = [
         dict(
             max_loss=d,
@@ -462,7 +494,11 @@ def preflight(rows, contract, config, options, sampling=None, baseline_ids=None)
         for f in floors
         for d in range(options["max_loss"] + 1)
     ]
+    if "max_tso_shift" in options:
+        policies = [dict(policy, max_tso_shift=shift) for policy in policies
+                    for shift in range(options["max_tso_shift"] + 1)]
     discovery_candidates = []
+    pattern_counts = Counter()
     for row in discovery:
         if baseline_ids is not None and row["read_id"] in baseline_ids:
             continue
@@ -476,6 +512,10 @@ def preflight(rows, contract, config, options, sampling=None, baseline_ids=None)
         )
         end = endpoint["locations"][0][1] + 1 if endpoint["editDistance"] >= 0 else -1
         discovery_candidates.append((cs, end))
+        # One family contributes once to each plausible interpretation. These
+        # counts describe ambiguity; they are not physical damage estimates.
+        for pos, loss, shift in {(c["position"], c["loss"], c["tso_end"] - end) for c in cs}:
+            pattern_counts[pos, loss, shift] += 1
     # The same molecule stays in one fold; each family counts once per challenge.
     challenges = []
     for row, c in truth:
@@ -591,7 +631,7 @@ def preflight(rows, contract, config, options, sampling=None, baseline_ids=None)
             if s["discovery_identified_families"] >= best * options["near_optimal_fraction"]
         ]
         selected = min(
-            close, key=lambda s: (s["policy"]["max_loss"], -s["policy"]["min_retained"])
+            close, key=lambda s: (s["policy"]["max_loss"], s["policy"].get("max_tso_shift", 0), -s["policy"]["min_retained"])
         )["policy"]
         selected = dict(selected, enabled=True)
     else:
@@ -607,6 +647,8 @@ def preflight(rows, contract, config, options, sampling=None, baseline_ids=None)
         status="validated" if passing else "inconclusive",
         note="Synthetic identity challenge precision is not empirical real-read FDR; biological validation is separate.",
     )
+    report["structural_patterns"] = [dict(position=p, fiveprime_loss=d, tso_endpoint_shift=t, families=n)
+                                     for (p, d, t), n in pattern_counts.most_common()]
     report["suffix_collision_groups"] = engine.reference_safety
     policy = make_policy(contract, options, selected)
     policy["preflight"] = report
