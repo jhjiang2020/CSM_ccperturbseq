@@ -91,6 +91,18 @@ def _recovery_counts(flags, cluster_map):
     }
 
 
+def _match_column_dtypes(columns):
+    """Keep sparse text annotations stable across parser and reader chunks.
+
+    Empty recovery annotations followed by JSON otherwise mix float/object
+    inference. With usecols, pandas 2.2 can fail inside its dtype warning path;
+    mixed identifier inference can also split one molecule across chunks.
+    Numeric and boolean design fields retain their established types.
+    """
+    inferred = {'position', 'pair_candidate_count', 'legacy_model_eligible'}
+    return {column: str for column in columns if column not in inferred}
+
+
 def stream_library_umi_dedup(match_path, lib_name, sample_name, sublib_index,
                              group_cols, max_umi_edits=1, min_reads_per_umi=1,
                              chunk_size=500_000):
@@ -127,7 +139,7 @@ def stream_library_umi_dedup(match_path, lib_name, sample_name, sublib_index,
     chunks_read = 0
 
     for chunk in pd.read_csv(match_path, sep='\t', usecols=needed_cols,
-                             chunksize=chunk_size):
+                             chunksize=chunk_size, dtype=_match_column_dtypes(needed_cols)):
         if 'guide_unit_id' in group_cols:
             chunk = chunk.fillna('')
         total_reads += len(chunk)
@@ -348,7 +360,8 @@ def stream_library_umi_dedup_sources(
                 read_cols.append('ibar_seq_corrected')
 
         for chunk in pd.read_csv(
-            match_path, sep='\t', usecols=read_cols, chunksize=chunk_size
+            match_path, sep='\t', usecols=read_cols, chunksize=chunk_size,
+            dtype=_match_column_dtypes(read_cols)
         ):
             if 'guide_unit_id' in group_cols:
                 chunk = chunk.fillna('')
@@ -619,7 +632,8 @@ def assign_single_guides(deduped_df, min_umi_threshold=5,
         DataFrame with per-cell guide assignments formatted for single-guide mode.
     """
     # Filter by UMI threshold
-    above_thresh = deduped_df[deduped_df['umi_count'] >= min_umi_threshold].copy()
+    totals = deduped_df.groupby(['bc_wells','grna_name'],as_index=False).umi_count.sum()
+    above_thresh = totals.loc[totals.umi_count.ge(min_umi_threshold)].copy()
 
     print(f"\n  Single-guide assignment (threshold={min_umi_threshold}):")
     print(f"    Entries above threshold: {len(above_thresh):,} "
@@ -636,7 +650,6 @@ def assign_single_guides(deduped_df, min_umi_threshold=5,
 
     # Apply multiplet strategy
     if multiplet_strategy == 'all':
-        # Keep all assignments
         result = above_thresh.copy()
         result['combo_type'] = 'singlet'
         result.loc[
@@ -666,7 +679,7 @@ def assign_single_guides(deduped_df, min_umi_threshold=5,
                 row['combo_type'] = 'multiplet'
                 result_parts.append(row)
 
-        result = pd.DataFrame(result_parts)
+        result = pd.DataFrame(result_parts, columns=[*above_thresh.columns, 'combo_type'])
 
     elif multiplet_strategy == 'discard':
         # Discard all multi-guide cells
@@ -687,7 +700,12 @@ def assign_single_guides(deduped_df, min_umi_threshold=5,
             print(f"      {status:>15}: {count:,}")
             
     print(f"    Final assignments:      {len(result):,}")
-    return result
+    # Keep unit/source annotations, but only for guides passing the cell-level rule.
+    output = deduped_df.merge(result.drop(columns='umi_count'),on=['bc_wells','grna_name'],
+                              how='inner',validate='many_to_one')
+    if 'n_guides' not in output:
+        output['n_guides'] = pd.Series(dtype=int)
+    return output
 
 
 def build_guide_umi_matrix(deduped_df, min_umi_threshold=0):
@@ -889,6 +907,13 @@ def assign_dual_guide_pairs(deduped_df, ref_df, min_umi_threshold=5, ibar_col='i
             print(f"    Processed {n_processed:,}/{len(unique_cells):,} cells...")
 
     result_df = pd.DataFrame(cell_records)
+    if result_df.empty:
+        result_df = pd.DataFrame(columns=[
+            'bc_wells', 'pair_id', 'target_combo', 'gi_pair', 'detection_status', 'inference_method',
+            'pair_umi_total', 'combo_type', 'n_combos',
+            *(f'pos{arm}_{field}' for arm in (1,2) for field in ('grna','ibar','target','umi','umi_raw')),
+            *(f'inferred_pos{arm}_{field}' for arm in (1,2) for field in ('grna','target')),
+        ])
     n_assigned_cells = result_df['bc_wells'].nunique()
     print(f"    Total cells with pair assignment: {n_assigned_cells:,}")
     print(f"    Total pair-assignments (rows):    {len(result_df):,}")

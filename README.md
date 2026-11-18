@@ -176,6 +176,7 @@ For another scheduler, follow the [portable worker recipe](docs/RUNNING.md#anoth
 | Reference preflight and resource scaling | [Preflight/scaling guide](docs/SCALABILITY_AND_PREFLIGHT.md) |
 | Existing run → v2.0 | [Migration guide](docs/MIGRATING_TO_V2.md) |
 | QC and historical validation reports | [Documentation index](docs/README.md) |
+| Guide UMI cache, primary calls and optional rescue | [Guide metadata contract](docs/GUIDE_METADATA.md) |
 
 The final product is `paths.output_dir/combined_adata.h5ad`. Per-library GEX,
 combined GEX, guide counts and optional contaminant evidence remain available

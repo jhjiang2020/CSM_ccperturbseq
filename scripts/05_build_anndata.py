@@ -28,6 +28,10 @@ except ImportError:  # Keep sparse-matrix helpers testable outside the HPC env.
 import yaml
 from scipy import io as sio
 from scipy import sparse
+try:
+    from scripts.guide_anndata import assignment_matrix, attach_contract, summarize_cache
+except ModuleNotFoundError:
+    from guide_anndata import assignment_matrix, attach_contract, summarize_cache
 
 
 def load_config(config_path):
@@ -52,7 +56,13 @@ def attach_recovery_metadata(adata, output_dir, libraries, gex_namespace='gex_gr
     """Attach guide-evidence provenance without touching expression counts."""
     if compact:
         policy = Path(output_dir) / 'grna_matches/relaxed_structure.json'
-        metadata = {'policy': policy.read_text(), 'molecule_counts': {}}
+        policies = {lib['sublibrary_name']: path.read_text() for lib in libraries
+                    if (path := Path(output_dir)/'grna_matches'/f"{lib['sublibrary_name']}_recovery.json").is_file()}
+        metadata = {'molecule_counts': {}}
+        if policy.is_file():
+            metadata['policy'] = policy.read_text()
+        if policies:
+            metadata['library_policies'] = policies
         for source in sources:
             base = Path(output_dir) / (gex_namespace if source == 'gex' else '') / 'grna_assignment'
             path = base / f'grna_recovery_cells_{source}.csv.gz'
@@ -85,6 +95,7 @@ def _guide_product_paths(output_dir, source, gex_namespace='gex_grna_identity'):
     if source == 'dedicated':
         return {
             'assignment': assign_dir / 'grna_cell_assignment.csv',
+            'counts': assign_dir / 'grna_umi_counts.csv.gz',
             'matrix': assign_dir / 'grna_umi_matrix.mtx',
             'barcodes': assign_dir / 'grna_matrix_barcodes.txt',
             'guides': assign_dir / 'grna_matrix_guides.txt',
@@ -93,6 +104,7 @@ def _guide_product_paths(output_dir, source, gex_namespace='gex_grna_identity'):
         gex_dir = Path(output_dir) / gex_namespace / 'grna_assignment'
         return {
             'assignment': gex_dir / 'gex_grna_assignments.csv.gz',
+            'counts': gex_dir / 'gex_grna_umi_counts.csv.gz',
             'matrix': gex_dir / 'gex_grna_umi_matrix.mtx',
             'barcodes': gex_dir / 'gex_grna_matrix_barcodes.txt',
             'guides': gex_dir / 'gex_grna_matrix_guides.txt',
@@ -100,6 +112,7 @@ def _guide_product_paths(output_dir, source, gex_namespace='gex_grna_identity'):
     if source == 'combined':
         return {
             'assignment': assign_dir / 'grna_cell_assignment_combined.csv',
+            'counts': assign_dir / 'grna_umi_counts_by_source.csv.gz',
             'matrix': assign_dir / 'grna_umi_matrix_combined.mtx',
             'barcodes': assign_dir / 'grna_matrix_combined_barcodes.txt',
             'guides': assign_dir / 'grna_matrix_combined_guides.txt',
@@ -147,14 +160,14 @@ def _align_guide_matrix(matrix, source_barcodes, target_barcodes):
     return aligned
 
 
-def _attach_guide_matrix(adata, matrix, barcodes, guides, source, min_umi):
+def _attach_guide_matrix(adata, matrix, barcodes, guides, source, min_umi, assignment=None):
     """Attach one source matrix under stable source-specific AnnData keys."""
     aligned = _align_guide_matrix(matrix, barcodes, list(adata.obs.index))
     suffix = '' if source == 'final' else f'_{source}'
     adata.obsm[f'gRNA_counts{suffix}'] = aligned
-    adata.obsm[f'gRNA_assignment{suffix}'] = (
-        aligned >= min_umi
-    ).astype(np.int8)
+    adata.obsm[f'gRNA_assignment{suffix}'] = (assignment_matrix(
+        assignment, aligned, adata.obs_names, guides, 'pos1_umi' in assignment
+    ) if assignment is not None else (aligned >= min_umi).astype(np.uint8))
     adata.uns[f'gRNA_names{suffix}'] = list(guides)
     return aligned
 
@@ -294,7 +307,10 @@ def main():
         description="Build combined AnnData with GEX + gRNA data"
     )
     parser.add_argument("--config", required=True, help="Path to config.yaml")
+    parser.add_argument('--destination', type=Path, help='Write a standalone copy without replacing the configured output')
     args = parser.parse_args()
+    if args.destination is not None and (args.destination.exists() or args.destination.suffix != '.h5ad'):
+        parser.error('--destination must be a new .h5ad file')
 
     if sc is None:
         raise ImportError(
@@ -335,6 +351,7 @@ def main():
         recovery_sources.append('gex')
     if combined_calls:
         recovery_sources.append('combined')
+    policy = None
     if 'relaxed_structure' in cfg.get('grna_structure', {}):
         try:
             from scripts import relaxed_structure
@@ -398,7 +415,9 @@ def main():
             f"Run Step 4 {final_guide_source} assignment first."
         )
 
-    assign_df = pd.read_csv(assign_path)
+    ids = {'bc_wells':str,'grna_name':str,'pair_id':str,'pos1_grna':str,'pos2_grna':str,
+           'inferred_pos1_grna':str,'inferred_pos2_grna':str}
+    assign_df = pd.read_csv(assign_path,dtype=ids)
     print(f"     Final guide-call source: {final_guide_source}")
     print(f"     Loaded {len(assign_df):,} assignments for "
           f"{assign_df['bc_wells'].nunique():,} cells")
@@ -433,11 +452,14 @@ def main():
     
     # --- 6. Add gRNA information to AnnData ---
     print("\n  6. Adding gRNA information to AnnData...")
+    legacy_metadata = cfg['guide_assignment'].get('legacy_anndata_metadata', True)
+    if not isinstance(legacy_metadata, bool):
+        raise ValueError('guide_assignment.legacy_anndata_metadata must be true or false')
 
     # Create per-cell summary from assignment data
     is_dual = 'detection_status' in assign_df.columns
 
-    if is_dual:
+    if legacy_metadata and is_dual:
         agg_dict = {
             'combo_type': ('combo_type', 'first'),  # same for all rows of a cell
             'detection_status': ('detection_status', lambda x: ','.join(sorted(x.unique()))),
@@ -492,7 +514,7 @@ def main():
             adata.obs['has_resolved_pair'] = adata.obs['pair_id'].ne('unassigned')
             adata.obs['has_grna'] = (adata.obs['pos1_umi'] + adata.obs['pos2_umi'] + adata.obs.get('unpositioned_umi', 0)) > 0
         
-    else:
+    elif legacy_metadata and (not assign_df.empty or 'combo_type' in assign_df):
         # Single-guide metadata aggregation
         agg_dict = {
             'grna_names': ('grna_name', lambda x: ','.join(sorted(x.unique()))),
@@ -526,8 +548,11 @@ def main():
             lambda x: x.split(',')[0] if x != 'unassigned' else 'unassigned'
         )
         adata.obs['has_grna'] = adata.obs['target_gene'] != 'unassigned'
+    elif legacy_metadata:
+        adata.obs['target_gene'] = 'unassigned'
+        adata.obs['has_grna'] = False
 
-    if combined_calls:
+    if combined_calls and legacy_metadata:
         dedicated_assignment_path = _guide_product_paths(
             output_dir, 'dedicated', gex_namespace
         )['assignment']
@@ -546,12 +571,8 @@ def main():
             "adata.obs['dedicated_*'] columns"
         )
 
-    print(f"     Cells with gRNA: {adata.obs['has_grna'].sum():,} "
-          f"({adata.obs['has_grna'].mean()*100:.1f}%)")
-    print(f"     Target gene/combo distribution:")
-    for gene, count in adata.obs['target_gene'].value_counts().head(20).items():
-        pct = count / adata.n_obs * 100
-        print(f"       {gene:>30s}: {count:>8,} ({pct:.1f}%)")
+    if legacy_metadata:
+        print(f"     Cells with legacy guide annotation: {adata.obs['has_grna'].sum():,}")
 
     # --- 6. Add gRNA UMI count matrix to obsm ---
     print("\n  6. Adding gRNA UMI matrix to obsm...")
@@ -564,13 +585,16 @@ def main():
         guide_names,
         source='final',
         min_umi=min_umi,
+        assignment=assign_df,
     )
 
     # Preserve inspectable source matrices. Combined calls remain the primary
     # unsuffixed keys only when explicitly enabled in config.
     optional_sources = []
     if combined_calls:
-        optional_sources.extend(('dedicated', 'gex', 'combined'))
+        optional_sources.extend(('dedicated', 'gex'))
+        if legacy_metadata:
+            optional_sources.append('combined')
     elif step1c_cfg.get('enabled', False):
         optional_sources.append('gex')
     for source in optional_sources:
@@ -582,6 +606,7 @@ def main():
             print(f"     WARNING: Optional {source} guide matrix not found")
             continue
         source_matrix, source_barcodes, source_guides = product
+        source_assignment = pd.read_csv(_guide_product_paths(output_dir, source, gex_namespace)['assignment'],dtype=ids)
         _attach_guide_matrix(
             adata,
             source_matrix,
@@ -589,7 +614,19 @@ def main():
             source_guides,
             source=source,
             min_umi=min_umi,
+            assignment=source_assignment,
         )
+
+    cache = final_product_paths['counts']
+    evidence, cache_totals = summarize_cache(cache,adata.obs_names,guide_names)
+    reference = (pd.DataFrame(policy['design_contract']['rows']) if policy is not None else
+                 pd.read_csv(cfg['paths']['grna_reference'], keep_default_na=False,dtype={'grna_name':str}))
+    final_path = args.destination or (Path(output_dir)/'combined_adata.h5ad')
+    cache_relative = os.path.relpath(cache.resolve(), final_path.resolve().parent)
+    attach_contract(adata, aligned_matrix, adata.obsm['gRNA_assignment'], evidence, assign_df,
+                    reference, cache, cfg['guide_assignment'], final_guide_source, optional_sources,
+                    cache_relative,cache_totals)
+    adata.uns['grna_schema']['primary_call_path'] = os.path.relpath(assign_path.resolve(),final_path.resolve().parent)
 
     print(f"     gRNA_counts shape: {aligned_matrix.shape}")
     print(f"     Non-zero entries: {aligned_matrix.nnz:,}")
@@ -628,7 +665,8 @@ def main():
     if cfg.get('grna_structure', {}).get('relaxed_structure', False) is not False:
         attach_recovery_metadata(adata, output_dir, cfg['libraries'], gex_namespace, compact=True, sources=recovery_sources)
     elif (cfg.get('grna_recovery') or {}).get('mode', 'off') not in ('off', False):
-        attach_recovery_metadata(adata, output_dir, cfg['libraries'], gex_namespace)
+        attach_recovery_metadata(adata, output_dir, cfg['libraries'], gex_namespace,
+                                 compact=not legacy_metadata,sources=recovery_sources)
     design_metadata = load_design_metadata(output_dir, cfg['libraries']) if enabled(cfg) else {}
     if design_metadata:
         adata.uns['guide_design'] = design_metadata
@@ -642,11 +680,11 @@ def main():
 
     # --- 8. Save ---
     print("\n  8. Saving combined AnnData...")
-    final_path = os.path.join(output_dir, 'combined_adata.h5ad')
     try:
         from scripts.grna_restart import write_anndata
     except ModuleNotFoundError:
         from grna_restart import write_anndata
+    final_path.parent.mkdir(parents=True,exist_ok=True)
     write_anndata(adata, final_path)
     print(f"     Saved: {final_path}")
     print(f"     Shape: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
@@ -660,8 +698,8 @@ def main():
     print(f"  GEX: {adata.n_vars:,} genes")
     print(f"  gRNA: {n_guides} guides")
     print(f"  Cells: {adata.n_obs:,}")
-    print(f"  Cells with gRNA: {adata.obs['has_grna'].sum():,} "
-          f"({adata.obs['has_grna'].mean()*100:.1f}%)")
+    assigned = adata.obs['grna_primary_n_guides'].gt(0)
+    print(f"  Cells with primary gRNA calls: {assigned.sum():,} ({assigned.mean()*100:.1f}%)")
     
     count_col = 'n_guides'
     if 'n_guides' not in adata.obs.columns and 'n_combos' in adata.obs.columns:
@@ -669,7 +707,7 @@ def main():
     
     if count_col in adata.obs.columns:
         print(f"  Mean {count_col.replace('n_', '')}/cell (assigned): "
-              f"{adata.obs.loc[adata.obs['has_grna'], count_col].mean():.2f}")
+              f"{adata.obs.loc[assigned, count_col].mean():.2f}")
     
     print(f"\n  Output: {final_path}")
     print(f"{'='*60}")
